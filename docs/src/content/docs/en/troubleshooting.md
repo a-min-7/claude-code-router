@@ -27,6 +27,13 @@ A: The provider model list, the model selected by routing, and the model in Agen
 
 A: Related information includes Fusion tool enabled state, Vision model or search-service key, MCP Discover tools, and timeout settings.
 
+For the built-in **vision** tool specifically, two additional failure modes are
+documented in [fusion-vision.md](fusion-vision.md) under *Fork contribution
+(Armin Monecke, 2026-08-06)*: (1) a base model that can OCR the image itself
+will answer directly instead of delegating (check `request_logs` for the
+absence of a call to the vision provider), and (2) non-streaming requests with
+internal tools can deadlock (499 timeout). Streaming requests are unaffected.
+
 ### Q: What information is related to request timeout?
 
 A: Request logs record duration and error information. Upstream latency, Fusion tool duration, and timeout settings can also affect timeout behavior.
