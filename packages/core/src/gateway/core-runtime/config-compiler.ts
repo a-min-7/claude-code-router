@@ -8,7 +8,7 @@ import { grokAccessTokenExpired, grokClientVersion } from "@ccr/core/agents/loca
 import { pluginService } from "@ccr/core/plugins/service";
 import { normalizeRouteSelector, providerRuntimeId } from "@ccr/core/routing/model-registry";
 import { isRecord, stringListValue, stringValue } from "@ccr/core/gateway/internal/value";
-import { coreGatewayWebSearchToolNameMatches, fusionBuiltinToolArtifacts, fusionToolFallbackMcpServer, normalizeFusionWebSearchProfileToolName, toolHubMcpServer, withCodexCompatibleVirtualModelProfiles, withFusionVirtualModelAliases, withFusionWebSearchToolInstructions } from "@ccr/core/mcp/fusion-config";
+import { coreGatewayVisionToolNameMatches, coreGatewayWebSearchToolNameMatches, fusionBuiltinToolArtifacts, fusionToolFallbackMcpServer, normalizeFusionWebSearchProfileToolName, toolHubMcpServer, withCodexCompatibleVirtualModelProfiles, withFusionVirtualModelAliases, withFusionWebSearchToolInstructions } from "@ccr/core/mcp/fusion-config";
 import { mediaToolsMcpServer } from "@ccr/core/mcp/grok-media-config";
 import { resolveGatewayPublicModelId } from "@ccr/core/gateway/features/model-discovery";
 import { activeProviderCredentials, inferProtocol, normalizedProviderCapabilities, normalizeProviderProtocol, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerProtocolForClientProtocol, sortProviderCredentialsForConfig, toCoreGatewayProviders } from "@ccr/core/providers/runtime-topology";
@@ -392,7 +392,64 @@ function normalizeCoreGatewayVirtualModelProfile(profile: unknown, config: AppCo
       };
   const profileAfterWebSearchToolName = normalizeFusionWebSearchProfileToolName(profileWithoutToolLoopLimits) ?? profileWithoutToolLoopLimits;
   const profileWithoutWebSearchFilter = clearWebSearchClientDeclarationFilter(profileAfterWebSearchToolName);
-  return withFusionWebSearchToolInstructions(profileWithoutWebSearchFilter) ?? profileWithoutWebSearchFilter;
+  const profileWithVisionInstruction = withExplicitVisionToolInstruction(profileWithoutWebSearchFilter);
+  return withFusionWebSearchToolInstructions(profileWithVisionInstruction) ?? profileWithVisionInstruction;
+}
+
+/**
+ * Give the base model an explicit, unambiguous instruction for how to call the
+ * vision tool with a media reference.
+ *
+ * ai-gateway's `rewriteVirtualModelMultimodalInput` converts an inline image into
+ * a `[media_ref:mm_xxx]` token and appends a generic note ("Multimodal inputs
+ * available to tools. Use the media_ref value when calling tools"). A reasoning
+ * base model like Nemotron struggles to turn that into a concrete tool call —
+ * it sees the raw image, may OCR it itself, and answers without ever emitting a
+ * `tool_use` for the vision tool (observed live: 0 tool_calls, no Qwen sub-call).
+ *
+ * The vision tool's schema takes `imageBase64`. Tell the base model explicitly
+ * that the `[media_ref:...]` value belongs in `imageBase64`. This makes the
+ * handoff concrete instead of leaving the model to guess.
+ */
+function withExplicitVisionToolInstruction(profile: Record<string, unknown>): Record<string, unknown> {
+  const tools = Array.isArray(profile.tools) ? profile.tools : [];
+  const visionTool = tools.find((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    const name = stringValue(tool.name);
+    return Boolean(name && coreGatewayVisionToolNameMatches(name));
+  });
+  if (!visionTool) {
+    return profile;
+  }
+  const toolName = isRecord(visionTool) ? stringValue(visionTool.name) : undefined;
+  if (!toolName) {
+    return profile;
+  }
+
+  const instruction = [
+    `When the conversation contains an image and the model input shows a \`[media_ref:...]\` value under "Multimodal inputs available to tools", call the ${toolName} function tool to analyze it.`,
+    "Set the tool's `imageBase64` argument to exactly the `[media_ref:...]` value (including the brackets) from the multimodal note.",
+    `Pass the user's image-analysis request in the tool's \`prompt\` argument.`,
+    "Do not answer image questions from your own reading of the image; always delegate to the vision tool first."
+  ].join(" ");
+
+  const instructions = isRecord(profile.instructions) ? profile.instructions : {};
+  if ([instructions.prepend, instructions.append, instructions.replace].some((value) => stringValue(value)?.includes(instruction))) {
+    return profile;
+  }
+  const replace = stringValue(instructions.replace);
+  const append = stringValue(instructions.append);
+  return {
+    ...profile,
+    instructions: {
+      ...instructions,
+      ...(replace
+        ? { replace: `${replace.trim()}\n\n${instruction}` }
+        : { append: [append, instruction].filter(Boolean).join("\n\n") })
+    }
+  };
 }
 
 /**

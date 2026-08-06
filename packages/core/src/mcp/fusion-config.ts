@@ -614,6 +614,13 @@ export function coreGatewayWebSearchToolNameMatches(name: string): boolean {
 }
 
 
+export function coreGatewayVisionToolNameMatches(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[-.]/g, "_");
+  return normalized === BUILTIN_FUSION_VISION_TOOL_NAME ||
+    normalized.startsWith(`${BUILTIN_FUSION_VISION_TOOL_NAME}_`);
+}
+
+
 function sanitizeFusionToolName(value: string): string {
   return value
     .toLowerCase()
