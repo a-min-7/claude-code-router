@@ -606,7 +606,7 @@ function coreGatewayCompatibleWebSearchToolName(toolName: string, fallbackName?:
 }
 
 
-function coreGatewayWebSearchToolNameMatches(name: string): boolean {
+export function coreGatewayWebSearchToolNameMatches(name: string): boolean {
   const normalized = name.toLowerCase().replace(/[-.]/g, "_");
   return normalized === BUILTIN_FUSION_WEB_SEARCH_TOOL_NAME ||
     normalized.endsWith(`_${BUILTIN_FUSION_WEB_SEARCH_TOOL_NAME}`) ||

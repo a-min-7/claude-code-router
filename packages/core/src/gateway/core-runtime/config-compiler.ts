@@ -8,7 +8,7 @@ import { grokAccessTokenExpired, grokClientVersion } from "@ccr/core/agents/loca
 import { pluginService } from "@ccr/core/plugins/service";
 import { normalizeRouteSelector, providerRuntimeId } from "@ccr/core/routing/model-registry";
 import { isRecord, stringListValue, stringValue } from "@ccr/core/gateway/internal/value";
-import { fusionBuiltinToolArtifacts, fusionToolFallbackMcpServer, normalizeFusionWebSearchProfileToolName, toolHubMcpServer, withCodexCompatibleVirtualModelProfiles, withFusionVirtualModelAliases, withFusionWebSearchToolInstructions } from "@ccr/core/mcp/fusion-config";
+import { coreGatewayWebSearchToolNameMatches, fusionBuiltinToolArtifacts, fusionToolFallbackMcpServer, normalizeFusionWebSearchProfileToolName, toolHubMcpServer, withCodexCompatibleVirtualModelProfiles, withFusionVirtualModelAliases, withFusionWebSearchToolInstructions } from "@ccr/core/mcp/fusion-config";
 import { mediaToolsMcpServer } from "@ccr/core/mcp/grok-media-config";
 import { resolveGatewayPublicModelId } from "@ccr/core/gateway/features/model-discovery";
 import { activeProviderCredentials, inferProtocol, normalizedProviderCapabilities, normalizeProviderProtocol, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerProtocolForClientProtocol, sortProviderCredentialsForConfig, toCoreGatewayProviders } from "@ccr/core/providers/runtime-topology";
@@ -391,7 +391,47 @@ function normalizeCoreGatewayVirtualModelProfile(profile: unknown, config: AppCo
         }
       };
   const profileAfterWebSearchToolName = normalizeFusionWebSearchProfileToolName(profileWithoutToolLoopLimits) ?? profileWithoutToolLoopLimits;
-  return withFusionWebSearchToolInstructions(profileAfterWebSearchToolName) ?? profileAfterWebSearchToolName;
+  const profileWithoutWebSearchFilter = clearWebSearchClientDeclarationFilter(profileAfterWebSearchToolName);
+  return withFusionWebSearchToolInstructions(profileWithoutWebSearchFilter) ?? profileWithoutWebSearchFilter;
+}
+
+/**
+ * When a fusion profile declares an explicit web_search tool in its `tools` list,
+ * `execution.matchWebSearch` must not gate it on a client web_search declaration.
+ *
+ * ai-gateway's `buildVirtualTooling` (handler.ts) treats `matchWebSearch: true` as
+ * "the fusion web_search tool only fires when the *client* also declares a web_search
+ * tool" (shouldRequireClientWebSearchDeclaration). That filters the explicitly-added
+ * tool out of the upstream request when the client sends none — so the base model
+ * never receives the tool and hallucinates instead of calling it.
+ *
+ * An explicit tool in `profile.tools` is unconditional: it should always be injected.
+ * Only clear the flag when the tool list itself already declares the web-search tool;
+ * otherwise `matchWebSearch` keeps its legacy "implicit declaration" meaning.
+ */
+function clearWebSearchClientDeclarationFilter(profile: Record<string, unknown>): Record<string, unknown> {
+  const execution = isRecord(profile.execution) ? profile.execution : {};
+  if (execution.matchWebSearch !== true) {
+    return profile;
+  }
+  const tools = Array.isArray(profile.tools) ? profile.tools : [];
+  const hasExplicitWebSearchTool = tools.some((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    const name = stringValue(tool.name);
+    return Boolean(name && coreGatewayWebSearchToolNameMatches(name));
+  });
+  if (!hasExplicitWebSearchTool) {
+    return profile;
+  }
+  return {
+    ...profile,
+    execution: {
+      ...execution,
+      matchWebSearch: false
+    }
+  };
 }
 
 
