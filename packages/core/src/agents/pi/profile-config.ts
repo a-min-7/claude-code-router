@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { buildCodexModelCatalogIds } from "@ccr/core/agents/codex/model-catalog";
 import type { AppConfig, ProfileConfig } from "@ccr/core/contracts/app";
+import { findModelCatalogEntry, modelCatalogMaxInputTokens } from "@ccr/core/gateway/model-catalog";
+import { modelRegistryForConfig } from "@ccr/core/routing/model-registry";
 
 export type PiProfileConfigWriteResult = {
   changed: boolean;
@@ -84,16 +86,18 @@ function piModelsJson(
           "x-ccr-client": "pi",
           "x-ccr-profile": profile.id || profile.name || "pi"
         },
-        models: models.map(piModelConfig)
+        models: models.map((m) => piModelConfig(config, m))
       }
     }
   };
 }
 
-function piModelConfig(model: string): Record<string, unknown> {
+function piModelConfig(config: AppConfig, model: string): Record<string, unknown> {
+  const contextWindow = piProfileModelContextWindow(config, model);
   return {
     id: model,
-    name: model
+    name: model,
+    ...(contextWindow !== undefined ? { contextWindow } : {})
   };
 }
 
@@ -102,6 +106,26 @@ function piProfileModels(config: AppConfig, defaultModel: string): string[] {
     defaultModel,
     ...buildCodexModelCatalogIds(config, defaultModel)
   ].filter(Boolean));
+}
+
+function piProfileModelContextWindow(
+  config: AppConfig,
+  modelSelector: string
+): number | undefined {
+  const resolved = modelRegistryForConfig(config).resolveProviderModel(modelSelector);
+  // Prefer provider modelMetadata (maxContextWindow, then contextWindow).
+  const configured = resolved?.provider.modelMetadata?.[resolved.model];
+  const window = configured?.maxContextWindow ?? configured?.contextWindow;
+  if (window && window > 0) {
+    return window;
+  }
+  // Fall back to the static model catalog (knows anthropic/deepseek/z.ai sizes),
+  // then omit entirely so pi keeps its own 128k default for truly-unknown models
+  // — never guess a value we cannot source.
+  const catalogSelector = resolved ? `${resolved.provider.name}/${resolved.model}` : modelSelector;
+  const entry = findModelCatalogEntry(catalogSelector) ?? findModelCatalogEntry(modelSelector);
+  const catalogWindow = modelCatalogMaxInputTokens(entry);
+  return catalogWindow > 0 ? catalogWindow : undefined;
 }
 
 function gatewayEndpoint(config: AppConfig): string {
