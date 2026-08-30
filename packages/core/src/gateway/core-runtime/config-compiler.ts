@@ -387,7 +387,12 @@ function normalizeCoreGatewayVirtualModelProfile(profile: unknown, config: AppCo
           // either field is missing. MAX_SAFE_INTEGER is the internal no-limit
           // sentinel for both dimensions; request timeout and cancellation remain.
           maxToolCalls: unlimitedVirtualModelToolCalls,
-          maxTurns: unlimitedVirtualModelToolTurns
+          maxTurns: unlimitedVirtualModelToolTurns,
+          // STOPGAP: ai-gateway 1.0.18 fixes the non-streaming 499 deadlock only
+          // when execution.foldInternalResults is true (c979058 gates on it, default
+          // false). Remove this once the fork syncs upstream 0f78d78, which exposes
+          // foldInternalResults as a per-profile feature rather than a hardcode.
+          foldInternalResults: true
         }
       };
   const profileAfterWebSearchToolName = normalizeFusionWebSearchProfileToolName(profileWithoutToolLoopLimits) ?? profileWithoutToolLoopLimits;
