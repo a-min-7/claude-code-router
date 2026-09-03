@@ -823,9 +823,43 @@ function stripUnsupportedOpenAiRequestParameters(body: Buffer | undefined): Buff
     return body;
   }
   const next = { ...parsedBody };
+  const thinkingIntent = next.thinking;
   delete next.thinking;
   delete next.reasoning_split;
+  // Map an explicit client thinking intent onto qwen-family `enable_thinking`
+  // (openai_chat / openai_responses providers that honor it) instead of dropping
+  // it — so a Claude Code / OpenAI client can control qwen thinking through CCR.
+  // When no clear on/off intent is present, emit nothing and the provider's own
+  // default applies (DeepSeek/Z.ai are unaffected). The toolhub resolver disables
+  // thinking itself via enable_thinking:false; this path covers other clients.
+  const enableThinking = thinkingIntentToEnableThinking(thinkingIntent);
+  if (enableThinking !== undefined) {
+    next.enable_thinking = enableThinking;
+  }
   return serializeJsonBody(next);
+}
+
+
+function thinkingIntentToEnableThinking(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (obj.type === "enabled") {
+      return true;
+    }
+    if (obj.type === "disabled") {
+      return false;
+    }
+    if (typeof obj.enabled === "boolean") {
+      return obj.enabled;
+    }
+    if (typeof obj.enabled === "string") {
+      return obj.enabled === "true";
+    }
+  }
+  return undefined;
 }
 
 
