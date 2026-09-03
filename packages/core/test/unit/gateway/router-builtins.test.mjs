@@ -3068,3 +3068,388 @@ test("built-in Claude Code subagent route ignores tags outside the first two mes
   assert.match(result.body.messages[2].content, /Provider\/claude-opus/);
   assert.equal(result.decision.reason, "builtin:claude-code");
 });
+
+function openAiThinkingProviderFixture() {
+  return [
+    {
+      models: ["claude-sonnet", "claude-opus", "claude-haiku"],
+      name: "OpenAI",
+      type: "openai_chat_completions"
+    }
+  ];
+}
+
+// ---- <CCR-SUBAGENT-THINKING> tag ----
+
+test("built-in Claude Code subagent thinking tag strips from system text and disables anthropic thinking", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Use <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING> for this subagent."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.system, "Use  for this subagent.");
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+  assert.equal(result.body.output_config, undefined);
+});
+
+test("built-in Claude Code subagent thinking tag strips from a system content block", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: [
+        { text: "Block <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING> end", type: "text" }
+      ]
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.deepEqual(result.body.system, [{ text: "Block  end", type: "text" }]);
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+});
+
+test("built-in Claude Code subagent thinking tag reads from the first user message content", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [{ content: "Start <CCR-SUBAGENT-THINKING>medium</CCR-SUBAGENT-THINKING> end", role: "user" }],
+      model: "claude-default"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.messages[0].content, "Start  end");
+  assert.deepEqual(result.body.output_config, { effort: "medium" });
+  assert.equal(result.body.thinking, undefined);
+});
+
+test("built-in Claude Code subagent thinking tag reads from the second user message content", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [
+        { content: "first", role: "user" },
+        { content: "Second <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>", role: "user" }
+      ],
+      model: "claude-default"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.messages[1].content, "Second ");
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+});
+
+test("built-in Claude Code subagent thinking tag ignores tags outside the first two messages", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [
+        { content: "first", role: "user" },
+        { content: "assistant response", role: "assistant" },
+        { content: "third <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>", role: "user" }
+      ],
+      model: "claude-default"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.match(result.body.messages[2].content, /CCR-SUBAGENT-THINKING/);
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.output_config, undefined);
+});
+
+test("built-in Claude Code subagent strips both model and thinking tags in any order", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system:
+        "Model <CCR-SUBAGENT-MODEL>Provider/claude-opus</CCR-SUBAGENT-MODEL> then " +
+        "thinking <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Provider/claude-opus");
+  assert.equal(result.body.system, "Model  then thinking .");
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+  assert.equal(result.decision.reason, "builtin:claude-code-subagent");
+});
+
+test("built-in Claude Code subagent thinking tag normalizes case and surrounding whitespace", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Use <CCR-SUBAGENT-THINKING>  OFF  </CCR-SUBAGENT-THINKING> here."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.system, "Use  here.");
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+});
+
+test("built-in Claude Code subagent thinking tag ignores an invalid value and emits a diagnostic", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Use <CCR-SUBAGENT-THINKING>turbo</CCR-SUBAGENT-THINKING> here."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.system, "Use  here.");
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.output_config, undefined);
+  assert.ok(result.decision.diagnostics.some((item) => item.code === "subagent-thinking-invalid"));
+});
+
+test("built-in Claude Code subagent thinking tag ignores a literal placeholder silently", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "Use <CCR-SUBAGENT-THINKING>on|off|low|medium|high</CCR-SUBAGENT-THINKING> here."
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.system, "Use  here.");
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.output_config, undefined);
+  assert.equal(result.decision.diagnostics.some((item) => item.code.startsWith("subagent-thinking-")), false);
+});
+
+test("built-in Claude Code subagent thinking on leaves anthropic thinking untouched", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>on</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.system, "");
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.output_config, undefined);
+});
+
+test("built-in Claude Code subagent thinking off overrides client anthropic thinking and effort", async () => {
+  const plugin = createRouterPlugin({ profileModel: "Provider/claude-sonnet" });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      output_config: { effort: "high" },
+      system: "Use <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>.",
+      thinking: { budget_tokens: 1000, type: "enabled" }
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.output_config, undefined);
+  assert.deepEqual(result.body.thinking, { type: "disabled" });
+});
+
+test("built-in Claude Code subagent thinking maps effort onto openai enable_thinking", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.enable_thinking, false);
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.model, "OpenAI/claude-sonnet");
+});
+
+test("built-in Claude Code subagent thinking tag replaces a client enable_thinking field", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      enable_thinking: true,
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.enable_thinking, false);
+  assert.equal(result.body.thinking, undefined);
+});
+
+test("built-in Claude Code subagent thinking on enables openai enable_thinking", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>high</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.enable_thinking, true);
+  assert.equal(result.body.thinking, undefined);
+});
+
+test("built-in Claude Code subagent thinking tag leaves model untouched when only the thinking tag is present", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "OpenAI/claude-opus",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "OpenAI/claude-opus");
+  assert.equal(result.body.enable_thinking, false);
+});
+
+test("built-in Claude Code subagent thinking tag emits a diagnostic for an unmapped target model", async () => {
+  const plugin = createRouterPlugin();
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "does-not-exist",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.body.enable_thinking, undefined);
+  assert.equal(result.decision.diagnostics.some((item) => item.code === "subagent-thinking-unmapped"), true);
+});
+
+test("built-in Claude Code subagent thinking tag emits a diagnostic for a gateway-kind target", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "Provider/claude-sonnet",
+    virtualModelProfiles: [
+      {
+        displayName: "Kimisearch",
+        enabled: true,
+        id: "fusion-search",
+        key: "kimisearch",
+        match: { exactAliases: ["kimisearch"], prefixes: [], suffixes: [] },
+        materialization: { enabled: true, includeInGatewayModels: true }
+      }
+    ]
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "Fusion/kimisearch",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.model, "Fusion/kimisearch");
+  assert.equal(result.body.thinking, undefined);
+  assert.equal(result.decision.diagnostics.some((item) => item.code === "subagent-thinking-unsupported-target"), true);
+});
+
+test("custom router rule thinking rewrite wins over the built-in subagent thinking tag", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture(),
+    routerRules: [
+      {
+        condition: {
+          left: "request.url",
+          operator: "contains",
+          right: "/v1/messages"
+        },
+        enabled: true,
+        id: "force-thinking-on",
+        name: "Force thinking on",
+        rewrites: [
+          { key: "request.body.enable_thinking", operation: "set", value: "true" }
+        ],
+        type: "condition"
+      }
+    ]
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.enable_thinking, true);
+});
+
