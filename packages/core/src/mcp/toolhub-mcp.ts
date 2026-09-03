@@ -1704,7 +1704,12 @@ class OpenAiToolHubSearchAgent {
     return {
       role: "assistant",
       content,
-      tool_calls: toolCalls
+      // Omit `tool_calls` when empty: strict OpenAI-compatible upstreams (DeepSeek)
+      // reject an assistant message with `tool_calls: []` on re-send ("expected an
+      // array with minimum length 1"), which 400'd the whole multi-turn resolve and
+      // silently fell back to local catalog matching. Only include the field when the
+      // model actually produced tool calls. (2026-09-03 toolhub resolve investigation.)
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
     };
   }
 }
