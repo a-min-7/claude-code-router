@@ -1662,6 +1662,19 @@ function piWrapperShellScript(
     .filter(([key]) => !isPiManagedEnvKey(key))
     .map(([key, value]) => `export ${key}=${shellQuote(value)}`);
   const noProxyHosts = grokGatewayNoProxyHosts(config);
+  // gpg-prime — non-fatal, conditional. pi routes via the CCR gateway (static key) and
+  // doesn't need gpg itself, but MCP/tools reading ~/.authinfo.gpg do. The unlock script
+  // lives outside CCR (personal-assistant scripts/ on the pi launch host), so the path is
+  // configurable via profile.env.PI_GPG_PRIME and the call no-ops if absent. Never blocks
+  // the launch. Skip under PI_BARE_MODE. See .claude/rules/pa-launcher.md gpg-prime note.
+  const gpgPrimePath =
+    profile.env?.PI_GPG_PRIME?.trim() ||
+    `${process.env.HOME || ""}/Projects/personal-assistant/scripts/gpg-prime.sh`;
+  const gpgPrimeBlock = [
+    `if [ -x ${shellQuote(gpgPrimePath)} ]; then`,
+    `  ${shellQuote(gpgPrimePath)} >/dev/null 2>&1 || echo "gpg-prime: [warn] gpg not unlocked — MCP tools reading ~/.authinfo.gpg may fail." >&2`,
+    "fi"
+  ];
   return [
     "#!/bin/sh",
     ...envExports,
@@ -1672,6 +1685,7 @@ function piWrapperShellScript(
     `export PI_CODING_AGENT_SESSION_DIR=${shellQuote(piConfig.sessionDir)}`,
     `export PI_SKIP_VERSION_CHECK=${shellQuote(profile.env?.PI_SKIP_VERSION_CHECK?.trim() || "1")}`,
     "export CCR_PROFILE_SURFACE=cli",
+    ...gpgPrimeBlock,
     `exec ${shellQuote(realPi)} --provider ${shellQuote(piConfig.providerId)} --model ${shellQuote(piConfig.model)} "$@"`,
     ""
   ].join("\n");
