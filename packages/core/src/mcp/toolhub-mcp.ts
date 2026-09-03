@@ -530,8 +530,15 @@ class ToolHubRuntime {
       openAiBaseUrl: env("TOOLHUB_OPENAI_BASE_URL") || "https://api.openai.com/v1",
       openAiModel: env("TOOLHUB_OPENAI_MODEL")
     });
+    // Pre-filter the catalog by task so the LLM plans over only the top task-relevant candidates.
+    // Scoring uses the full CatalogEntry; the LLM sees the distilled, pre-filtered view.
+    const candidateCatalog = topCatalogCandidates(
+      [input.task, input.context ? JSON.stringify(input.context) : ""].filter(Boolean).join(" "),
+      input.catalog,
+      envNumber("TOOLHUB_CATALOG_CANDIDATES", 60)
+    );
     const result = await searchAgent.search({
-      catalog: input.catalog.map(toSearchCatalogItem),
+      catalog: candidateCatalog.map(toSearchCatalogItem),
       code: JSON.stringify({
         context: input.context ?? {},
         observations: input.observations ?? []
@@ -2029,7 +2036,7 @@ function toSearchCatalogItem(entry: CatalogEntry): SearchCatalogItem {
   return {
     alias: entry.alias,
     canonicalName: entry.canonicalName,
-    description: entry.description,
+    description: distillToolDescription(entry.description),
     invocationMode: entry.invocation.mode,
     name: entry.toolName,
     remoteToolName: entry.remoteToolName,
@@ -2040,6 +2047,53 @@ function toSearchCatalogItem(entry: CatalogEntry): SearchCatalogItem {
     title: entry.title
   };
 }
+
+// Catalog-prompt slimming (2026-09-03): the planner needs each tool's PURPOSE to choose it, not
+// its full usage doc/schema (those are used at invoke time from the real CatalogEntry, untouched).
+// Distill the original MCP description to a compact purpose line + render the catalog as compact
+// lines so the LLM prompt (and its ~33k-token prefill, which dominates local-model resolve latency)
+// stays small.
+function distillToolDescription(description: string | undefined): string {
+  if (!description) {
+    return "";
+  }
+  const purpose = description
+    .replace(/\n?\*\*?Args?\s*\*\*?:.*$/is, "")
+    .replace(/\n?\*\*?Returns?\s*\*\*?:.*$/is, "")
+    .replace(/^#{1,4}\s*/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (purpose.length <= 200) {
+    return purpose;
+  }
+  return `${purpose.slice(0, 200).replace(/\s+\S*$/, "")}…`;
+}
+
+
+function renderCatalogItem(item: SearchCatalogItem): string {
+  const req = (item.required ?? []).length > 0 ? (item.required ?? []).join(",") : "-";
+  const alias = item.alias && item.alias !== item.name ? ` (alias ${item.alias})` : "";
+  const head = `${item.name}${alias} · server ${item.serverId} · sideEffect ${item.sideEffect} · requires ${req}`;
+  return item.description ? `${head}\n  ${item.description}` : head;
+}
+
+
+// Step 3: pre-filter the catalog by task before the LLM. Score every CatalogEntry (full
+// description — better recall) against the task with the same local matcher the fallback path
+// uses, keep the top-N candidates, and let the LLM plan over only those. Cuts prefill further and
+// reduces selection noise. N env-gated via TOOLHUB_CATALOG_CANDIDATES (default 60).
+function topCatalogCandidates(taskText: string, catalog: CatalogEntry[], limit: number): CatalogEntry[] {
+  if (catalog.length <= limit) {
+    return catalog;
+  }
+  const preferred = getLocalFallbackPreferredTools(taskText);
+  return catalog
+    .map((tool, index) => ({ index, score: scoreLocalCatalogMatch(taskText, tool, preferred), tool }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, limit)
+    .map((x) => x.tool);
+}
+
 
 function buildSearchSystemPrompt(catalog: SearchCatalogItem[], topK: number): string {
   return [
@@ -2079,7 +2133,7 @@ function buildSearchSystemPrompt(catalog: SearchCatalogItem[], topK: number): st
     "- If the catalog has no strong match, return an empty toolNames array.",
     "",
     "Tool catalog:",
-    JSON.stringify(catalog, null, 2)
+    catalog.map(renderCatalogItem).join("\n")
   ].join("\n");
 }
 
