@@ -1407,7 +1407,11 @@ class StdioMcpClient implements McpClient {
 
 const treeSitterToolName = "tree_sitter_collect_tool_references";
 const minSearchTimeoutMs = 8_000;
-const maxTurnTimeoutMs = 60_000;
+// Per-LLM-turn cap (ms). Configurable via TOOLHUB_LLM_STEP_TIMEOUT_MS so slow/local
+// resolver models (dense MLX models need >60s to prefill a ~33k-token catalog turn)
+// are not starved — default 60s keeps the interactive latency ceiling for API models.
+// (2026-09-03: local-model capability testing.)
+const maxTurnTimeoutMs = envNumber("TOOLHUB_LLM_STEP_TIMEOUT_MS", 60_000);
 const minTurnRemainingMs = 3_500;
 const minFinalAnswerTurnTimeoutMs = 8_000;
 const timeoutHeadroomMs = 1_500;
@@ -1674,7 +1678,13 @@ class OpenAiToolHubSearchAgent {
           }
         }
       ],
-      tool_choice: "auto"
+      tool_choice: "auto",
+      // Tool resolution is a text-selection task — thinking/reasoning is pure latency
+      // overhead. Disable it: qwen-family honors enable_thinking:false (large speedup);
+      // DeepSeek and Z.ai accept-and-ignore the field (verified 2026-09-03 against
+      // qwen3.8, DeepSeek v4-flash/pro, Z.ai glm-4.5-flash). Kept unconditional so a
+      // local/API resolver never pays for thinking it does not need.
+      enable_thinking: false
     } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, {
       timeout: timeoutMs
     });
