@@ -474,6 +474,15 @@ export async function fetchUpstreamWithFallback(input: {
         signal: input.signal
       });
 
+      // Failure-class surfacing: name the diagnosable auth/billing failures before they are
+      // aggregated into ai-gateway's opaque "All target providers failed." message.
+      if (!response.ok) {
+        const failureClass = describeProviderHttpFailure(response.status);
+        if (failureClass) {
+          console.error(`[gateway] upstream provider ${attemptProvider ?? String(attemptUrl)} returned HTTP ${response.status}: ${failureClass}`);
+        }
+      }
+
       if (hasNextAttempt && shouldFallbackAfterStatus(response.status, fallbackMode)) {
         const delayMs = retryDelayAfterStatus(response.headers, failedAttempts.length);
         input.trace?.capture({
@@ -814,6 +823,24 @@ function usageAwareOpenAiChatAttemptBody(input: {
   return providerProtocol === "openai_chat_completions"
     ? usageAwareOpenAiChatBody(sanitizedBody)
     : sanitizedBody;
+}
+
+
+// Failure-class surfacing (2026-09-03): ai-gateway aggregates a multi-provider failure into the
+// opaque "All target providers failed." message, hiding whether the real cause was auth (401/403)
+// or billing (402, e.g. DeepSeek "Insufficient Balance"). CCR's executor sees each provider's raw
+// status, so surface the diagnosable classes here before they vanish into the aggregate.
+export function describeProviderHttpFailure(status: number): string | undefined {
+  if (status === 401) {
+    return "auth — invalid or expired API key (check the provider credential)";
+  }
+  if (status === 402) {
+    return "billing — payment required / out of credits (check the provider account balance)";
+  }
+  if (status === 403) {
+    return "auth — forbidden (key lacks permission or is blocked)";
+  }
+  return undefined;
 }
 
 
