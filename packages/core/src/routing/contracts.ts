@@ -32,7 +32,10 @@ export type RouteDiagnosticCode =
   | "script-model-not-configured"
   | "script-runtime-error"
   | "script-source-invalid"
-  | "script-timeout";
+  | "script-timeout"
+  | "subagent-thinking-invalid"
+  | "subagent-thinking-unmapped"
+  | "subagent-thinking-unsupported-target";
 
 export type RouteDiagnostic = {
   code: RouteDiagnosticCode;
@@ -54,6 +57,7 @@ export type RouteDecision = {
 export type RouteRequest = {
   builtInClaudeCodeSubagent?: boolean;
   builtInSubagentModel?: string;
+  builtInSubagentThinking?: string;
   body: Record<string, unknown>;
   headers: Record<string, string | string[] | undefined>;
   log: Pick<Console, "debug" | "error" | "info" | "warn">;

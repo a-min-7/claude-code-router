@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
-import { isGatewayProviderEnabled, type AppConfig, type ProfileClientKind, type ProfileConfig, type RequestRouteTraceChange, type RouterBuiltInAgentRuleId, type RouterFallbackConfig, type RouterRule, type RouterRuleCondition } from "@ccr/core/contracts/app";
+import { isGatewayProviderEnabled, type AppConfig, type GatewayProviderProtocol, type ProfileClientKind, type ProfileConfig, type RequestRouteTraceChange, type RouterBuiltInAgentRuleId, type RouterFallbackConfig, type RouterRule, type RouterRuleCondition } from "@ccr/core/contracts/app";
 import { CONFIGDIR } from "@ccr/core/config/constants";
 import { applyAgentRequestEnrichers } from "@ccr/core/agents/request-enricher";
 import { buildClaudeAppGatewayModelRoutes, type ClaudeAppGatewayModelRoute, resolveClaudeAppGatewayRouteModel, stripClaudeAppGatewayOneMillionContextSuffix } from "@ccr/core/agents/claude-app/gateway-routes";
@@ -12,8 +12,10 @@ import type { RouteDecision, RouteDiagnostic, RouteModelRef, RouteRequest, Route
 import { ModelRegistry, normalizeRouteSelector } from "@ccr/core/routing/model-registry";
 import { RoutePolicyEngine, type RoutePolicy } from "@ccr/core/routing/policy-engine";
 import type { RouteTraceObserver } from "@ccr/core/observability/route-trace";
-import { applyCompiledRouteRewrite, isBodyModelCompiledRewrite, type CompiledRouteRewrite } from "@ccr/core/routing/rewrite";
+import { applyCompiledRouteRewrite, compileConfiguredRouteRewrite, isBodyModelCompiledRewrite, type CompiledRouteRewrite } from "@ccr/core/routing/rewrite";
 import { buildRouteScriptInput } from "@ccr/core/routing/route-script-context";
+import { providerProtocolForClientProtocol } from "@ccr/core/providers/runtime-topology";
+import { requestProtocolForPath } from "@ccr/core/routing/protocol-endpoints";
 import { normalizeRouteScriptResult } from "@ccr/core/routing/route-script-result";
 import type { RouteScriptRuntime } from "@ccr/core/routing/route-script-runtime";
 import { profileApiKeyId } from "@ccr/core/profiles/api-key";
@@ -82,6 +84,7 @@ export class ClaudeCodeRouterPlugin {
         injectClaudeCodeToolHubInstructions(matchedRequest.body, this.config);
         matchedRequest.builtInClaudeCodeSubagent = removeClaudeCodeBillingSystemHeader(matchedRequest.body);
         matchedRequest.builtInSubagentModel = extractAndRemoveClaudeCodeSubagentModelTag(matchedRequest.body);
+        matchedRequest.builtInSubagentThinking = extractAndRemoveClaudeCodeSubagentThinkingTag(matchedRequest.body);
       },
       id: "claude-code",
       matches: (candidate) => builtInAgentRouteMatches(candidate, this.config, "claude-code")
@@ -154,8 +157,8 @@ export class ClaudeCodeRouterPlugin {
         ...(configuredDecision.model.kind === "provider" ? { provider: configuredDecision.model.provider.name } : {})
       } : undefined
     });
-    if (configuredDecision.rewrites.length) {
-      for (const rewrite of configuredDecision.rewrites) {
+    const applyRouteRewrites = (rewrites: CompiledRouteRewrite[]): void => {
+      for (const rewrite of rewrites) {
         if (selectedModel !== undefined && isBodyModelCompiledRewrite(rewrite)) {
           continue;
         }
@@ -171,6 +174,23 @@ export class ClaudeCodeRouterPlugin {
           startedAtMs: rewriteStartedAt
         });
       }
+    };
+    // <CCR-SUBAGENT-THINKING> is a built-in layer: it overrides any client thinking intent in the
+    // request body, but custom routing-rule rewrites are applied after it and therefore win on the
+    // same key (base rewrites precede rule rewrites, mirroring mergeConfiguredRouteDecisions).
+    if (request.builtInSubagentThinking !== undefined) {
+      const thinkingEffect = resolveSubagentThinkingEffect({
+        bodyModel: readString(body.model),
+        model: configuredDecision.model,
+        modelRegistry: this.compiled.modelRegistry,
+        url: input.url,
+        value: request.builtInSubagentThinking
+      });
+      runtimeDiagnostics.push(...thinkingEffect.diagnostics);
+      applyRouteRewrites(thinkingEffect.rewrites);
+    }
+    if (configuredDecision.rewrites.length) {
+      applyRouteRewrites(configuredDecision.rewrites);
     }
     const routedModel = configuredDecision.model?.selector ?? readString(body.model);
 
@@ -757,6 +777,12 @@ const ccrSubagentModelOpenTag = "<CCR-SUBAGENT-MODEL>";
 const ccrSubagentModelCloseTag = "</CCR-SUBAGENT-MODEL>";
 const ccrSubagentModelTagExample = `${ccrSubagentModelOpenTag}Provider/model${ccrSubagentModelCloseTag}`;
 const ccrSubagentModelPlaceholder = "provider/model";
+const ccrSubagentThinkingOpenTag = "<CCR-SUBAGENT-THINKING>";
+const ccrSubagentThinkingCloseTag = "</CCR-SUBAGENT-THINKING>";
+const ccrSubagentThinkingValueList = ["on", "off", "low", "medium", "high"] as const;
+type SubagentThinkingValue = typeof ccrSubagentThinkingValueList[number];
+const ccrSubagentThinkingPlaceholder = ccrSubagentThinkingValueList.join("|");
+const ccrSubagentThinkingValues = new Set<string>(ccrSubagentThinkingValueList);
 const claudeCodeBillingSystemHeaderPrefix = "x-anthropic-billing-header";
 const claudeCodeSubagentModelEnv = "CLAUDE_CODE_SUBAGENT_MODEL";
 const ccrSubagentToolModelInstruction =
@@ -1214,6 +1240,230 @@ function extractAndRemoveSubagentModelTagFromText(
   const nextText = `${text.slice(0, openIndex)}${text.slice(closeIndex + ccrSubagentModelCloseTag.length)}`;
   replace(nextText);
   return model;
+}
+
+function extractAndRemoveClaudeCodeSubagentThinkingTag(body: Record<string, unknown>): string | undefined {
+  const systemThinking = extractAndRemoveSystemSubagentThinkingTag(body);
+  if (systemThinking !== undefined) {
+    return systemThinking;
+  }
+  return extractAndRemoveMessageSubagentThinkingTag(body);
+}
+
+function extractAndRemoveSystemSubagentThinkingTag(body: Record<string, unknown>): string | undefined {
+  const system = body.system;
+  if (typeof system === "string") {
+    return extractAndRemoveSubagentThinkingTagFromText(system, (text) => {
+      body.system = text;
+    });
+  }
+  if (!Array.isArray(system)) {
+    return undefined;
+  }
+  for (let index = 0; index < system.length; index += 1) {
+    const block = system[index];
+    const thinking = extractAndRemoveSubagentThinkingTagFromContentBlock(block, (text) => {
+      if (typeof block === "string") {
+        system[index] = text;
+      } else if (isRecord(block)) {
+        block.text = text;
+      }
+    });
+    if (thinking !== undefined) {
+      return thinking;
+    }
+  }
+  return undefined;
+}
+
+function extractAndRemoveMessageSubagentThinkingTag(body: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(body.messages)) {
+    return undefined;
+  }
+  const limit = Math.min(body.messages.length, 2);
+  for (let index = 0; index < limit; index += 1) {
+    const message = body.messages[index];
+    if (!isRecord(message) || message.role !== "user") {
+      continue;
+    }
+    const thinking = extractAndRemoveSubagentThinkingTagFromMessage(message);
+    if (thinking !== undefined) {
+      return thinking;
+    }
+  }
+  return undefined;
+}
+
+function extractAndRemoveSubagentThinkingTagFromMessage(message: Record<string, unknown>): string | undefined {
+  if (typeof message.content === "string") {
+    return extractAndRemoveSubagentThinkingTagFromText(message.content, (text) => {
+      message.content = text;
+    });
+  }
+  if (!Array.isArray(message.content)) {
+    return undefined;
+  }
+  const content = message.content;
+  for (let index = 0; index < content.length; index += 1) {
+    const block = content[index];
+    const thinking = extractAndRemoveSubagentThinkingTagFromContentBlock(block, (text) => {
+      if (typeof block === "string") {
+        content[index] = text;
+      } else if (isRecord(block)) {
+        block.text = text;
+      }
+    });
+    if (thinking !== undefined) {
+      return thinking;
+    }
+  }
+  return undefined;
+}
+
+function extractAndRemoveSubagentThinkingTagFromContentBlock(
+  block: unknown,
+  replace: (text: string) => void
+): string | undefined {
+  if (typeof block === "string") {
+    return extractAndRemoveSubagentThinkingTagFromText(block, replace);
+  }
+  if (!isRecord(block) || typeof block.text !== "string") {
+    return undefined;
+  }
+  return extractAndRemoveSubagentThinkingTagFromText(block.text, replace);
+}
+
+// Stripping is unconditional once a well-formed open/close pair exists: an invalid or
+// empty value is removed from the prompt all the same (the marker must never leak
+// upstream), and the raw value is surfaced to the router so it can emit a diagnostic.
+// First occurrence wins; the model tag is a separate pass and the two are order-independent.
+function extractAndRemoveSubagentThinkingTagFromText(
+  text: string,
+  replace: (text: string) => void
+): string | undefined {
+  const openIndex = text.indexOf(ccrSubagentThinkingOpenTag);
+  if (openIndex < 0) {
+    return undefined;
+  }
+  const valueStart = openIndex + ccrSubagentThinkingOpenTag.length;
+  const closeIndex = text.indexOf(ccrSubagentThinkingCloseTag, valueStart);
+  if (closeIndex < 0) {
+    return undefined;
+  }
+  const value = text.slice(valueStart, closeIndex).trim();
+  const nextText = `${text.slice(0, openIndex)}${text.slice(closeIndex + ccrSubagentThinkingCloseTag.length)}`;
+  replace(nextText);
+  return value;
+}
+
+// <CCR-SUBAGENT-THINKING> → body-field mapping (RFC docs/rfc/subagent-thinking-tag.md §3).
+// The table is keyed by the provider protocol the request will actually ride, computed the
+// same way the executor does (providerProtocolForClientProtocol against the request path).
+// Fleet correction 2026-09-03: openai_responses providers in this fleet are qwen-family oMLX
+// backends that honor enable_thinking (not reasoning.effort), so both openai protocols map to
+// enable_thinking. A genuine OpenAI Responses backend (none deployed) would need reasoning.effort.
+function resolveSubagentThinkingEffect(input: {
+  bodyModel: string | undefined;
+  model?: RouteModelRef;
+  modelRegistry: ModelRegistry;
+  url: string;
+  value: string;
+}): { diagnostics: RouteDiagnostic[]; rewrites: CompiledRouteRewrite[] } {
+  const value = input.value.trim().toLowerCase();
+  if (value === ccrSubagentThinkingPlaceholder) {
+    return { diagnostics: [], rewrites: [] };
+  }
+  if (!isSubagentThinkingValue(value)) {
+    return {
+      diagnostics: [{
+        code: "subagent-thinking-invalid",
+        message: `Invalid <CCR-SUBAGENT-THINKING> value "${value}"; expected ${ccrSubagentThinkingValueList.join(" | ")}.`,
+        source: "subagent"
+      }],
+      rewrites: []
+    };
+  }
+  const resolvedModel = input.model ?? (input.bodyModel ? input.modelRegistry.resolve(input.bodyModel) : undefined);
+  if (!resolvedModel) {
+    return {
+      diagnostics: [{
+        code: "subagent-thinking-unmapped",
+        message: `Cannot apply <CCR-SUBAGENT-THINKING>: model "${input.bodyModel ?? "(none)"}" is not configured to a routeable provider.`,
+        ...(input.bodyModel ? { model: input.bodyModel } : {}),
+        source: "subagent"
+      }],
+      rewrites: []
+    };
+  }
+  if (resolvedModel.kind === "gateway") {
+    return {
+      diagnostics: [{
+        code: "subagent-thinking-unsupported-target",
+        message: `Cannot apply <CCR-SUBAGENT-THINKING> to gateway-kind model "${resolvedModel.selector}".`,
+        model: resolvedModel.selector,
+        source: "subagent"
+      }],
+      rewrites: []
+    };
+  }
+  const clientProtocol = requestProtocolForPath(input.url);
+  const protocol = clientProtocol
+    ? providerProtocolForClientProtocol(resolvedModel.provider, clientProtocol)
+    : undefined;
+  if (protocol !== "anthropic_messages" && protocol !== "openai_chat_completions" && protocol !== "openai_responses") {
+    return {
+      diagnostics: [{
+        code: "subagent-thinking-unmapped",
+        message: `Cannot apply <CCR-SUBAGENT-THINKING>: provider protocol ${protocol ?? "unknown"} does not expose a thinking field.`,
+        model: resolvedModel.selector,
+        source: "subagent"
+      }],
+      rewrites: []
+    };
+  }
+  return { diagnostics: [], rewrites: buildSubagentThinkingRewrites(value as SubagentThinkingValue, protocol) };
+}
+
+function isSubagentThinkingValue(value: string): boolean {
+  return ccrSubagentThinkingValues.has(value);
+}
+
+function buildSubagentThinkingRewrites(
+  value: SubagentThinkingValue,
+  protocol: GatewayProviderProtocol
+): CompiledRouteRewrite[] {
+  const rewrites: CompiledRouteRewrite[] = [];
+  // Values stay strings and compileConfiguredRouteRewrite's parseRewriteLiteral converts
+  // "false"/"true" → boolean and JSON-shaped strings → objects at compile time (RFC §3 rules).
+  const push = (key: string, operation: "delete" | "set", fieldValue?: string): void => {
+    const rewrite: { key: string; operation: "delete" | "set"; value?: string } = { key, operation };
+    if (operation === "set" && fieldValue !== undefined) {
+      rewrite.value = fieldValue;
+    }
+    const compiled = compileConfiguredRouteRewrite(rewrite);
+    if (compiled.rewrite) {
+      rewrites.push(compiled.rewrite);
+    }
+  };
+  if (protocol === "anthropic_messages") {
+    if (value === "off") {
+      // Turn extended thinking off and drop any client effort override that could re-enable it.
+      push("request.body.output_config", "delete");
+      push("request.body.thinking", "set", '{"type":"disabled"}');
+    } else if (value !== "on") {
+      // Effort levels map onto Anthropic's output_config.effort (same shape hosted-web-search uses).
+      push("request.body.output_config", "set", JSON.stringify({ effort: value }));
+    }
+    // "on" is Anthropic's default; enabling extended thinking also needs a non-goal budget_tokens.
+    return rewrites;
+  }
+  // openai_chat_completions / openai_responses: strip any client thinking intent first so the
+  // executor's thinking→enable_thinking mapping has nothing to re-derive (one consistent shape),
+  // then set the canonical boolean. Effort levels are lossy → enabled, per the RFC.
+  push("request.body.thinking", "delete");
+  push("request.body.enable_thinking", "delete");
+  push("request.body.enable_thinking", "set", value === "off" ? "false" : "true");
+  return rewrites;
 }
 
 async function resolveRouterRule(

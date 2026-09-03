@@ -7,6 +7,7 @@ const maxToolNames = 128;
 export type RouteScriptInput = {
   apiKeyId?: string;
   builtInSubagentModel?: string;
+  builtInSubagentThinking?: string;
   body: Record<string, unknown>;
   headers: Record<string, string | string[]>;
   method: string;
@@ -36,6 +37,7 @@ export function buildRouteScriptInput(
   const input: RouteScriptInput = {
     ...(apiKeyId ? { apiKeyId } : {}),
     ...(request.builtInSubagentModel ? { builtInSubagentModel: request.builtInSubagentModel } : {}),
+    ...(request.builtInSubagentThinking ? { builtInSubagentThinking: request.builtInSubagentThinking } : {}),
     body: cloneJson(request.body) as Record<string, unknown>,
     headers: requestHeaders(request.headers),
     method: request.method,
