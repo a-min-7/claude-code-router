@@ -53,6 +53,26 @@ Description 建议围绕模型适合的任务来写，例如：
 
 保存后，CCR 会把这些 Description 组织成 “Configured CCR gateway models” 注入给 Claude Code。Claude Code 选择模型后，CCR 会在派生请求上看到 `builtin:claude-code-subagent`，并把标签里的模型作为最终 `resolved model`。
 
+##### Subagent 思考级别（reasoning effort）
+
+与模型标签配套，派生出来的 Agent 也可以用同样的机制为每次请求设置思考级别：CCR 会无条件提取标签、在转发前移除，并且失败时保持原样（fail-open）。
+
+```text
+<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>
+```
+
+取值是封闭集合 `on | off | low | medium | high`（忽略首尾空白、不区分大小写）。其它值、空标签或字面占位符会被忽略（非法值会产生 `subagent-thinking-invalid` 诊断），并且标签始终会被移除，避免泄漏给上游。放置位置与模型标签一致：system 提示（文本或 content block）或前两条用户消息。它可以与模型标签同时、单独或相反地使用——模型标签决定模型，思考标签则按该模型最终所用协议改写请求体。
+
+| 取值 | Anthropic 兼容目标（`anthropic_messages`） | OpenAI 兼容目标（DeepSeek、本地 qwen 等） |
+| --- | --- | --- |
+| `off` | `thinking: { type: "disabled" }`（同时移除客户端的 `output_config`） | `enable_thinking: false` |
+| `on` | 不改写——采用供应商默认 | `enable_thinking: true` |
+| `low` / `medium` / `high` | `output_config: { effort: … }` | `enable_thinking: true`（有损——本地 OpenAI 兼容后端是二元的） |
+
+目标协议按网关解析上游的方式判定（供应商针对请求路径的能力）：Claude Code `/v1/messages` 请求若路由到声明了 Anthropic 兼容能力的本地模型，会走 Anthropic 线路并写入 `thinking` / `output_config`；OpenAI 形态的请求则写入 `enable_thinking`。已在 `wangfu/Qwen3.6-35B-A3B-oQ4-mtp` 上实测：`off` 关闭了 qwen 的推理通道，`on` 保持供应商默认（推理开启）。
+
+解析到的标签会替换请求体里客户端的 `thinking` / `enable_thinking` 字段；但自定义路由规则若改写同一个 body 键，会在内置决策之后生效并获胜。v1 不提供 UI，不支持 token 预算（`budget_tokens` / `thinking_budget`），也不支持 Codex 路由。
+
 ### Codex
 
 CCR 会自动为第三方或非 GPT 模型适配 Codex 的 `apply_patch` 文件编辑工具，让这些模型通过 patch 工具完成文件修改。

@@ -53,6 +53,26 @@ Write descriptions around the tasks the model handles. For example:
 
 After saving, CCR formats those descriptions as “Configured CCR gateway models” in the injected Claude Code instructions. When Claude Code picks a model, request logs should show `builtin:claude-code-subagent`, and the tagged model becomes the final `resolved model`.
 
+##### Subagent thinking level (reasoning effort)
+
+A spawned agent can also set a per-request reasoning level, using the same mechanics as the model tag — a sibling tag is extracted unconditionally, removed before forwarding, and fails open:
+
+```text
+<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>
+```
+
+The value is a closed set — `on | off | low | medium | high` (trimmed, case-insensitive). Any other value, an empty tag, or a literal placeholder is ignored (an invalid value emits a `subagent-thinking-invalid` diagnostic), and the tag is still stripped so the marker never leaks upstream. Place it on the same surfaces as the model tag: the system prompt (text or content block) or the first two user messages. It works with, without, and against the model tag — the model tag picks the model, and the thinking tag rewrites the request body for whatever model that resolves to.
+
+| Value | Anthropic-compatible target (`anthropic_messages`) | OpenAI-compatible target (DeepSeek, local qwen-family, …) |
+| --- | --- | --- |
+| `off` | `thinking: { type: "disabled" }` (and drops a client `output_config`) | `enable_thinking: false` |
+| `on` | no rewrite — the provider default applies | `enable_thinking: true` |
+| `low` / `medium` / `high` | `output_config: { effort: … }` | `enable_thinking: true` (lossy — OpenAI-compatible local backends are binary) |
+
+The target protocol is derived the same way the gateway resolves it upstream (the provider's capability for the request path), so a Claude Code `/v1/messages` request to a local model that declares an Anthropic-compatible capability rides the Anthropic wire and receives `thinking` / `output_config`, while an OpenAI-shaped request receives `enable_thinking`. Verified against `wangfu/Qwen3.6-35B-A3B-oQ4-mtp`: `off` suppressed qwen's reasoning channel, `on` left the provider's default (reasoning enabled) in place.
+
+A resolved tag replaces any client `thinking` / `enable_thinking` fields in the request body, but a custom routing rule that rewrites the same body key is applied after the built-in decision and wins over the tag. v1 ships no UI surface, no token budgets (`budget_tokens` / `thinking_budget`), and no Codex route.
+
 ### Codex
 
 CCR automatically adapts Codex's `apply_patch` file-editing tool for third-party or non-GPT models, so those models edit files through the patch tool.
