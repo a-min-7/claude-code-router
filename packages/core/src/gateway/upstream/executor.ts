@@ -822,7 +822,7 @@ function usageAwareOpenAiChatAttemptBody(input: {
 }
 
 
-function stripUnsupportedOpenAiRequestParameters(body: Buffer | undefined): Buffer | undefined {
+export function stripUnsupportedOpenAiRequestParameters(body: Buffer | undefined): Buffer | undefined {
   const parsedBody = parseJsonObjectSafe(body);
   if (!parsedBody || (!("thinking" in parsedBody) && !("reasoning_split" in parsedBody))) {
     return body;
@@ -845,7 +845,7 @@ function stripUnsupportedOpenAiRequestParameters(body: Buffer | undefined): Buff
 }
 
 
-function thinkingIntentToEnableThinking(value: unknown): boolean | undefined {
+export function thinkingIntentToEnableThinking(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
   }
@@ -861,7 +861,13 @@ function thinkingIntentToEnableThinking(value: unknown): boolean | undefined {
       return obj.enabled;
     }
     if (typeof obj.enabled === "string") {
-      return obj.enabled === "true";
+      if (obj.enabled === "true") {
+        return true;
+      }
+      if (obj.enabled === "false") {
+        return false;
+      }
+      return undefined;
     }
   }
   return undefined;
