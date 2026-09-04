@@ -806,7 +806,7 @@ function usageAwareOpenAiChatAttemptBody(input: {
   body: Buffer | undefined;
   config: AppConfig;
   path: string;
-  target?: { protocol: GatewayProviderProtocol };
+  target?: { protocol: GatewayProviderProtocol; provider?: GatewayProviderConfig; model?: string };
 }): Buffer | undefined {
   const clientProtocol = requestProtocolForPath(input.path);
   const parsedBody = parseJsonObjectSafe(input.body);
@@ -819,10 +819,19 @@ function usageAwareOpenAiChatAttemptBody(input: {
   if (providerProtocol !== "openai_chat_completions" && providerProtocol !== "openai_responses") {
     return input.body;
   }
-  const sanitizedBody = stripUnsupportedOpenAiRequestParameters(input.body);
+  const strippedBody = stripUnsupportedOpenAiRequestParameters(input.body);
+  // Z.ai glm-5.3 forced-thinking effort clamp — normalize effort/thinking before
+  // the engine converts output_config.effort → reasoning_effort for the upstream.
+  // modelSelector (resolved from body.model) carries the provider+model; the target
+  // fallback is the full ProviderCredentialRoutingTarget the caller already supplies.
+  const normalizedBody = normalizeZaiGlm53ReasoningEffort({
+    body: strippedBody,
+    provider: modelSelector?.provider ?? input.target?.provider,
+    model: modelSelector?.model ?? stringValue(parsedBody?.model)
+  });
   return providerProtocol === "openai_chat_completions"
-    ? usageAwareOpenAiChatBody(sanitizedBody)
-    : sanitizedBody;
+    ? usageAwareOpenAiChatBody(normalizedBody)
+    : normalizedBody;
 }
 
 
@@ -893,6 +902,106 @@ export function thinkingIntentToEnableThinking(value: unknown): boolean | undefi
     }
   }
   return undefined;
+}
+
+
+// Z.ai glm-5.3 forced-thinking effort clamp (2026-09-04):
+// GLM-5.3 / GLM-5.3-FLASH are forced-thinking models that accept only
+// reasoning_effort ∈ {low, high, max}. Claude Code's default effort is
+// "medium" (sent as output_config.effort); Z.ai rejects it with 400 code 1210
+// ("This model always engages in thinking and cannot be disabled; please use
+// low, high, or max"). The config-only advertisement route was proven dead
+// (Claude Code ignores the gateway's supportedReasoningLevels when picking its
+// default), so we normalize here per Z.AI's documented Coding-Plan mapping:
+// none/minimal/low→low, medium/high→high, xhigh/ultra/max→max. Disabling
+// thinking is impossible on 5.3; a disable intent maps to "low" (closest to off).
+// See docs: https://docs.z.ai/guides/llm/glm-5.3 + /guides/capabilities/thinking.md
+// Gated to api.z.ai + glm-5.3-family only — glm-5.2/glm-5 accept medium fine.
+const ZAI_FORCED_THINKING_MODELS = new Set(["glm-5.3", "glm-5.3-flash"]);
+
+function isZaiForcedThinkingProvider(provider: GatewayProviderConfig | undefined): boolean {
+  const baseUrl = provider?.api_base_url ?? provider?.baseUrl ?? provider?.baseurl ?? "";
+  return baseUrl.toLowerCase().includes("api.z.ai");
+}
+
+function mapZaiReasoningEffort(effort: string | undefined): string | undefined {
+  if (!effort) {
+    return undefined;
+  }
+  const normalized = effort.trim().toLowerCase().replace(/[-_\s]+/g, "");
+  if (normalized === "none" || normalized === "minimal" || normalized === "low") {
+    return "low";
+  }
+  if (normalized === "medium" || normalized === "high") {
+    return "high";
+  }
+  if (normalized === "xhigh" || normalized === "ultra" || normalized === "max") {
+    return "max";
+  }
+  // Unknown effort — leave unset (Z.ai default = max); Z.ai will reject if invalid.
+  return undefined;
+}
+
+export function normalizeZaiGlm53ReasoningEffort(input: {
+  body: Buffer | undefined;
+  provider: GatewayProviderConfig | undefined;
+  model: string | undefined;
+}): Buffer | undefined {
+  if (!input.body || !input.provider || !input.model) {
+    return input.body;
+  }
+  if (!isZaiForcedThinkingProvider(input.provider) || !ZAI_FORCED_THINKING_MODELS.has(input.model)) {
+    return input.body;
+  }
+  const parsedBody = parseJsonObjectSafe(input.body);
+  if (!parsedBody) {
+    return input.body;
+  }
+  const hasReasoningEffort = "reasoning_effort" in parsedBody;
+  const hasOutputConfigEffort = isRecord(parsedBody.output_config) && "effort" in (parsedBody.output_config as Record<string, unknown>);
+  const hasThinking = "thinking" in parsedBody;
+  const hasEnableThinking = "enable_thinking" in parsedBody;
+  if (!hasReasoningEffort && !hasOutputConfigEffort && !hasThinking && !hasEnableThinking) {
+    return input.body;
+  }
+  const next = { ...parsedBody };
+  // Normalize reasoning_effort (post-conversion field) and output_config.effort
+  // (pre-conversion, what Claude Code actually sends). The engine converts
+  // output_config.effort → reasoning_effort downstream; normalizing both ensures
+  // the upstream receives a valid value regardless of conversion stage.
+  let resolvedEffort: string | undefined;
+  if (hasReasoningEffort) {
+    resolvedEffort = mapZaiReasoningEffort(stringValue(parsedBody.reasoning_effort));
+  }
+  if (!resolvedEffort && hasOutputConfigEffort) {
+    resolvedEffort = mapZaiReasoningEffort(
+      stringValue((parsedBody.output_config as Record<string, unknown>).effort)
+    );
+  }
+  // Strip disable intents — glm-5.3 rejects thinking.type:"disabled" and enable_thinking:false.
+  // A disable intent maps to "low" (closest to off on a forced-thinking model).
+  if (hasThinking) {
+    const thinkingIntent = parsedBody.thinking;
+    const enableThinking = thinkingIntentToEnableThinking(thinkingIntent);
+    delete next.thinking;
+    if (enableThinking === false && !resolvedEffort) {
+      resolvedEffort = "low";
+    }
+  }
+  if (hasEnableThinking) {
+    const enableThinkingValue = parsedBody.enable_thinking;
+    delete next.enable_thinking;
+    if (enableThinkingValue === false && !resolvedEffort) {
+      resolvedEffort = "low";
+    }
+  }
+  if (resolvedEffort) {
+    next.reasoning_effort = resolvedEffort;
+    if (isRecord(next.output_config)) {
+      next.output_config = { ...(next.output_config as Record<string, unknown>), effort: resolvedEffort };
+    }
+  }
+  return serializeJsonBody(next);
 }
 
 
