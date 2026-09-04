@@ -16,6 +16,7 @@ import { isLocalClaudeCodeOauthProviderPlugin, mergeAnthropicBetaValues } from "
 import { abortSignalMessage, formatError, omitLocalObservabilityHeaders, shouldSendBody, withCoreGatewayAuthHeader } from "@ccr/core/gateway/http/io";
 import { parseJsonObjectSafe, releaseJsonObject, serializeJsonBody, serializeJsonBodyWithModel } from "@ccr/core/gateway/http/body";
 import { resolveGatewayPublicModelId } from "@ccr/core/gateway/features/model-discovery";
+import { ZAI_FORCED_THINKING_MODELS } from "@ccr/core/mcp/zai-forced-thinking-models";
 import { activeProviderCredentials, findProviderByPublicOrInternalName, findProviderCredentialBySlug, normalizedProviderCapabilities, parseProviderCredentialInternalName, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerCredentialPriority, providerCredentialRuntimeId, providerCredentialSlug, providerProtocolForClientProtocol, sanitizeHeaderValue } from "@ccr/core/providers/runtime-topology";
 import { delay } from "@ccr/core/gateway/internal/clock";
 import { retryDelayAfterNetworkError, retryDelayAfterStatus, shouldFallbackAfterStatus } from "@ccr/core/gateway/upstream/retry-policy";
@@ -917,7 +918,7 @@ export function thinkingIntentToEnableThinking(value: unknown): boolean | undefi
 // thinking is impossible on 5.3; a disable intent maps to "low" (closest to off).
 // See docs: https://docs.z.ai/guides/llm/glm-5.3 + /guides/capabilities/thinking.md
 // Gated to api.z.ai + glm-5.3-family only — glm-5.2/glm-5 accept medium fine.
-const ZAI_FORCED_THINKING_MODELS = new Set(["glm-5.3", "glm-5.3-flash"]);
+// ZAI_FORCED_THINKING_MODELS imported from @ccr/core/mcp/zai-forced-thinking-models.
 
 function isZaiForcedThinkingProvider(provider: GatewayProviderConfig | undefined): boolean {
   const baseUrl = provider?.api_base_url ?? provider?.baseUrl ?? provider?.baseurl ?? "";
