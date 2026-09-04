@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
+import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -1466,6 +1467,9 @@ type ToolReference = {
   source: string;
 };
 
+// isZaiForcedThinkingModel + ZAI_FORCED_THINKING_MODELS imported above from
+// @ccr/core/mcp/zai-forced-thinking-models (shared with executor.ts).
+
 class OpenAiToolHubSearchAgent {
   private readonly analyzer = new ToolReferenceAnalyzer();
 
@@ -1687,11 +1691,15 @@ class OpenAiToolHubSearchAgent {
       ],
       tool_choice: "auto",
       // Tool resolution is a text-selection task — thinking/reasoning is pure latency
-      // overhead. Disable it: qwen-family honors enable_thinking:false (large speedup);
-      // DeepSeek and Z.ai accept-and-ignore the field (verified 2026-09-03 against
-      // qwen3.8, DeepSeek v4-flash/pro, Z.ai glm-4.5-flash). Kept unconditional so a
-      // local/API resolver never pays for thinking it does not need.
-      enable_thinking: false
+      // overhead. For most models, disable thinking via enable_thinking:false (qwen-family
+      // honors it; DeepSeek and Z.ai accept-and-ignore it — verified 2026-09-03 against
+      // qwen3.8, DeepSeek v4-flash/pro, Z.ai glm-4.5-flash). GLM-5.3 / GLM-5.3-FLASH are
+      // forced-thinking models that reject enable_thinking:false with 400 code 1210; use
+      // reasoning_effort:"low" instead (the lightest level, closest to off — Z.ai docs:
+      // https://docs.z.ai/guides/llm/glm-5.3 + /guides/capabilities/thinking.md).
+      ...(isZaiForcedThinkingModel(model)
+        ? { reasoning_effort: "low" }
+        : { enable_thinking: false })
     } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, {
       timeout: timeoutMs
     });
