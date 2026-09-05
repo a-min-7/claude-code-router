@@ -6,6 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
 import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
+import {
+  isSessionLossError,
+  McpServerHttpError,
+  McpSseStreamClosedError
+} from "@ccr/core/mcp/toolhub-mcp-session";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -940,20 +945,26 @@ class SseMcpClient implements McpClient {
   private readonly pending = new Map<string, PendingRequest>();
   private streamAbort: AbortController | undefined;
   private streamBuffer = "";
+  private streamGeneration = 0;
+  private recovery: Promise<void> | undefined;
 
   constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
 
   async listTools(): Promise<ToolDefinition[]> {
-    await this.ensureInitialized();
-    const result = await this.request("tools/list", {});
-    return normalizeToolList(result);
+    return this.withSessionRecovery(async () => {
+      await this.ensureInitialized();
+      const result = await this.request("tools/list", {});
+      return normalizeToolList(result);
+    });
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    await this.ensureInitialized();
-    return this.request("tools/call", {
-      name,
-      arguments: args
+    return this.withSessionRecovery(async () => {
+      await this.ensureInitialized();
+      return this.request("tools/call", {
+        name,
+        arguments: args
+      });
     });
   }
 
@@ -963,6 +974,59 @@ class SseMcpClient implements McpClient {
     this.streamAbort?.abort();
     this.streamAbort = undefined;
     this.rejectAll(new Error(`MCP SSE client closed: ${this.server.name}`));
+  }
+
+  /**
+   * Run an operation, and on session/stream loss reset the transport, open a
+   * fresh stream + session, and retry the operation exactly once. Concurrent
+   * callers that hit session loss share the single in-flight recovery. Only
+   * typed session-loss errors (see toolhub-mcp-session.ts) trigger recovery —
+   * timeouts and generic network errors surface to the caller unchanged.
+   */
+  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSessionLossError(error)) {
+        throw error;
+      }
+    }
+    if (!this.recovery) {
+      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
+        this.recovery = undefined;
+      });
+    }
+    await this.recovery;
+    return operation();
+  }
+
+  private async reinitializeAfterSessionLoss(): Promise<void> {
+    // Abort the dead stream and drop the transport state so ensureStream()
+    // reopens a fresh GET (and ensureInitialized mints a fresh session). The
+    // old reader loop is generation-guarded and cannot clobber the new stream.
+    this.streamAbort?.abort();
+    this.streamAbort = undefined;
+    this.streamBuffer = "";
+    this.endpointUrl = "";
+    this.initialized = false;
+    await this.ensureInitialized();
+  }
+
+  /**
+   * Terminal handler for the reader loop of the CURRENT stream (a stale reader
+   * from a superseded stream is generation-mismatched and returns immediately).
+   * Resets transport state so the next use reopens a fresh stream/session, and
+   * rejects anything in flight.
+   */
+  private onStreamEnded(generation: number, error: Error): void {
+    if (generation !== this.streamGeneration) {
+      return;
+    }
+    this.streamAbort = undefined;
+    this.streamBuffer = "";
+    this.initialized = false;
+    this.endpointUrl = "";
+    this.rejectAll(error);
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -993,6 +1057,7 @@ class SseMcpClient implements McpClient {
 
   private async openStream(): Promise<void> {
     const controller = new AbortController();
+    const generation = ++this.streamGeneration;
     this.streamAbort = controller;
     const response = await fetch(this.server.url, {
       headers: this.headers(false),
@@ -1032,11 +1097,13 @@ class SseMcpClient implements McpClient {
             this.routeSseMessage(event.data);
           });
         }
-        this.rejectAll(new Error(`MCP SSE stream closed (${this.server.name}).`));
+        this.onStreamEnded(generation, new McpSseStreamClosedError(`MCP SSE stream closed (${this.server.name}).`));
       } catch (error) {
         clearTimeout(timeout);
-        rejectEndpoint(toError(error));
-        this.rejectAll(toError(error));
+        if (generation === this.streamGeneration) {
+          rejectEndpoint(toError(error));
+        }
+        this.onStreamEnded(generation, toError(error));
       }
     })();
 
@@ -1085,7 +1152,12 @@ class SseMcpClient implements McpClient {
       method: "POST"
     });
     if (!response.ok) {
-      throw new Error(`MCP SSE post failed (${this.server.name}): ${response.status}`);
+      const text = await response.text().catch(() => "");
+      throw new McpServerHttpError(
+        `MCP SSE post failed (${this.server.name}): ${response.status} ${text.slice(0, 300)}`,
+        response.status,
+        text
+      );
     }
   }
 
@@ -1130,26 +1202,61 @@ class SseMcpClient implements McpClient {
 class HttpMcpClient implements McpClient {
   private initialized = false;
   private sessionId = "";
+  private recovery: Promise<void> | undefined;
 
   constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
 
   async listTools(): Promise<ToolDefinition[]> {
-    await this.ensureInitialized();
-    const result = await this.request("tools/list", {});
-    return normalizeToolList(result);
+    return this.withSessionRecovery(async () => {
+      await this.ensureInitialized();
+      const result = await this.request("tools/list", {});
+      return normalizeToolList(result);
+    });
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    await this.ensureInitialized();
-    return this.request("tools/call", {
-      name,
-      arguments: args
+    return this.withSessionRecovery(async () => {
+      await this.ensureInitialized();
+      return this.request("tools/call", {
+        name,
+        arguments: args
+      });
     });
   }
 
   async close(): Promise<void> {
     this.initialized = false;
     this.sessionId = "";
+  }
+
+  /**
+   * Run an operation, and on session loss (see toolhub-mcp-session.ts) discard
+   * the stale session id, mint a fresh one via a new initialize, and retry the
+   * operation exactly once. Concurrent callers that hit session loss share the
+   * single in-flight recovery. Timeouts and generic HTTP errors surface to the
+   * caller unchanged.
+   */
+  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSessionLossError(error)) {
+        throw error;
+      }
+    }
+    if (!this.recovery) {
+      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
+        this.recovery = undefined;
+      });
+    }
+    await this.recovery;
+    return operation();
+  }
+
+  private async reinitializeAfterSessionLoss(): Promise<void> {
+    this.initialized = false;
+    this.sessionId = "";
+    await this.ensureInitialized();
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -1213,7 +1320,11 @@ class HttpMcpClient implements McpClient {
       }
       const text = await response.text();
       if (!response.ok) {
-        throw new Error(`MCP HTTP request failed (${this.server.name}): ${response.status} ${text.slice(0, 300)}`);
+        throw new McpServerHttpError(
+          `MCP HTTP request failed (${this.server.name}): ${response.status} ${text.slice(0, 300)}`,
+          response.status,
+          text
+        );
       }
       if (!text.trim()) {
         return undefined;
