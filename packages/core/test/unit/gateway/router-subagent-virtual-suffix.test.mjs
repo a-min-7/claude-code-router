@@ -4,10 +4,14 @@ import { ClaudeCodeRouterPlugin } from "@ccr/core/gateway/claude-code-router-plu
 import { prepareClaudeAppDiscoveredModelRequest } from "@ccr/core/gateway/features/model-discovery.ts";
 import { prepareGatewayUpstreamAttemptForTest } from "@ccr/core/gateway/service.ts";
 
-// Issue #1693: a claude-code profile model carrying the "[1m]" virtual suffix is
+// Issue #1693: a claude-code profile model carrying the "[1m]" virtual suffix was
 // injected verbatim by the subagent remap path (cc_is_subagent), after ingress
-// virtual-suffix normalization has already run for the client-supplied model.
-// The suffixed string is forwarded to the upstream provider and fails with 404.
+// virtual-suffix normalization had already run for the client-supplied model,
+// and the suffixed string was forwarded upstream and failed with 404.
+//
+// The subagent remap no longer overrides an explicit client model: a subagent
+// requesting a bare model is honored directly, so the profile's "[1m]" suffix is
+// never injected. These tests assert no "[1m]" suffix reaches the result/wire.
 
 function createIssue1693Config(options = {}) {
   return {
@@ -71,7 +75,7 @@ function routeIssue1693Request(config, body) {
   });
 }
 
-test("issue 1693 subagent remap normalizes the [1m] virtual suffix on the profile model", async () => {
+test("issue 1693 subagent explicit model is honored and drops the profile [1m] suffix", async () => {
   const config = createIssue1693Config();
   const result = await routeIssue1693Request(config, {
     messages: [],
@@ -82,10 +86,10 @@ test("issue 1693 subagent remap normalizes the [1m] virtual suffix on the profil
   assert.equal(result.body.model, "Provider/claude-fable-5");
   assert.doesNotMatch(result.body.model, /\[1m\]$/);
   assert.equal(result.decision.model, "Provider/claude-fable-5");
-  assert.equal(result.decision.reason, "builtin:claude-code");
+  assert.equal(result.decision.reason, "default");
 });
 
-test("issue 1693 subagent remap strips the suffix from a bare [1m] profile model", async () => {
+test("issue 1693 subagent explicit model ignores a bare [1m] profile model", async () => {
   const config = createIssue1693Config({ profileModel: "claude-fable-5[1m]" });
   const result = await routeIssue1693Request(config, {
     messages: [],
@@ -95,7 +99,7 @@ test("issue 1693 subagent remap strips the suffix from a bare [1m] profile model
 
   assert.equal(result.body.model, "Provider/claude-fable-5");
   assert.doesNotMatch(result.body.model, /\[1m\]$/);
-  assert.equal(result.decision.reason, "builtin:claude-code");
+  assert.equal(result.decision.reason, "default");
 });
 
 test("issue 1693 subagent remap forwards a suffix-free wire model upstream", async () => {
@@ -137,7 +141,7 @@ test("issue 1693 subagent env remap normalizes a [1m] virtual suffix", async () 
   assert.equal(result.decision.reason, "builtin:claude-code-subagent-env");
 });
 
-test("issue 1693 subagent remap resolves a [1m] profile model against the bare provider entry", async () => {
+test("issue 1693 subagent explicit model resolves against the bare provider entry", async () => {
   const config = createIssue1693Config({
     profileModel: "Provider/claude-fable-5[1m]",
     providerModels: ["claude-fable-5"]
@@ -150,7 +154,7 @@ test("issue 1693 subagent remap resolves a [1m] profile model against the bare p
 
   assert.equal(result.body.model, "Provider/claude-fable-5");
   assert.equal(result.decision.model, "Provider/claude-fable-5");
-  assert.equal(result.decision.reason, "builtin:claude-code");
+  assert.equal(result.decision.reason, "default");
 });
 
 test("issue 1693 parent-session client models keep the ingress [1m] normalization", async () => {
