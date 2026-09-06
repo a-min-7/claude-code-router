@@ -603,9 +603,6 @@ function explicitClientModelCanOverrideBuiltInClaudeCodeRoute(
   if (!builtInAgentRouteMatches(request, config, "claude-code")) {
     return true;
   }
-  if (request.builtInClaudeCodeSubagent === true) {
-    return false;
-  }
   const profile = resolveAuthenticatedProfile(request, config, "claude-code");
   const configuredSubagentModel = resolveConfiguredClaudeCodeModel(
     profile?.env?.[claudeCodeSubagentModelEnv],
