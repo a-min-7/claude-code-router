@@ -817,10 +817,19 @@ function usageAwareOpenAiChatAttemptBody(input: {
       ? providerProtocolForClientProtocol(modelSelector.provider, clientProtocol)
       : undefined
   );
+  // Strip tool-schema "pattern" regexes with Unicode property escapes before the
+  // attempt for any protocol — DeepSeek serves anthropic_messages by translating to
+  // its OpenAI backend, so the anthropic_messages path needs this too, not just the
+  // OpenAI conversions below.
+  const sanitizedBody = sanitizeUnsupportedToolSchemaPatterns({
+    body: input.body,
+    provider: modelSelector?.provider ?? input.target?.provider,
+    model: modelSelector?.model ?? stringValue(parsedBody?.model)
+  });
   if (providerProtocol !== "openai_chat_completions" && providerProtocol !== "openai_responses") {
-    return input.body;
+    return sanitizedBody;
   }
-  const strippedBody = stripUnsupportedOpenAiRequestParameters(input.body);
+  const strippedBody = stripUnsupportedOpenAiRequestParameters(sanitizedBody);
   // Z.ai glm-5.3 forced-thinking effort clamp — normalize effort/thinking before
   // the engine converts output_config.effort → reasoning_effort for the upstream.
   // modelSelector (resolved from body.model) carries the provider+model; the target
@@ -903,6 +912,73 @@ export function thinkingIntentToEnableThinking(value: unknown): boolean | undefi
     }
   }
   return undefined;
+}
+
+
+// Tool-schema pattern sanitization (2026-09-09): Claude Code >= 2.1.266 ships an
+// "Artifact" tool whose JSON schema declares a "pattern" regex using ECMA-262
+// Unicode property escapes (\p{Cc}, \p{Cf}, \p{Zl}, \p{Zp}). Anthropic's own API
+// and lenient local backends (wangfu Qwen, grace Nemotron) accept it, but strict
+// OpenAI-compatible validators — DeepSeek's anthropic_messages bridge and Z.ai's
+// chat/completions — reject \p{...} as "not a regex" and return 400, surfacing as
+// "All target providers failed." Those pattern fields are validation-only
+// metadata: dropping them relaxes an input constraint but never changes tool
+// semantics, so we strip them for providers that reject Unicode property escapes.
+const PROVIDERS_REJECTING_UNICODE_PROPERTY_PATTERNS = ["api.deepseek.com", "api.z.ai"];
+
+function providerRejectsUnicodePropertyPatterns(provider: GatewayProviderConfig | undefined): boolean {
+  const baseUrl = (provider?.api_base_url ?? provider?.baseUrl ?? provider?.baseurl ?? "").toLowerCase();
+  return PROVIDERS_REJECTING_UNICODE_PROPERTY_PATTERNS.some((host) => baseUrl.includes(host));
+}
+
+function stripUnicodePropertyPatterns(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const result = stripUnicodePropertyPatterns(item);
+      if (result.changed) {
+        changed = true;
+      }
+      return result.value;
+    });
+    return { value: next, changed };
+  }
+  if (isRecord(value)) {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "pattern" && typeof child === "string" && child.includes("\\p{")) {
+        changed = true;
+        continue;
+      }
+      const result = stripUnicodePropertyPatterns(child);
+      if (result.changed) {
+        changed = true;
+      }
+      next[key] = result.value;
+    }
+    return { value: next, changed };
+  }
+  return { value, changed: false };
+}
+
+export function sanitizeUnsupportedToolSchemaPatterns(input: {
+  body: Buffer | undefined;
+  provider: GatewayProviderConfig | undefined;
+  model: string | undefined;
+}): Buffer | undefined {
+  if (!input.body || !providerRejectsUnicodePropertyPatterns(input.provider)) {
+    return input.body;
+  }
+  const parsedBody = parseJsonObjectSafe(input.body);
+  if (!parsedBody) {
+    return input.body;
+  }
+  const { value, changed } = stripUnicodePropertyPatterns(parsedBody);
+  if (!changed) {
+    return input.body;
+  }
+  return serializeJsonBody(value as Record<string, unknown>);
 }
 
 
