@@ -839,9 +839,17 @@ function usageAwareOpenAiChatAttemptBody(input: {
     provider: modelSelector?.provider ?? input.target?.provider,
     model: modelSelector?.model ?? stringValue(parsedBody?.model)
   });
+  // OpenAI gpt-5.x / o-series reject `max_tokens` ("Use 'max_completion_tokens'
+  // instead"). Rename for every api.openai.com model — max_completion_tokens is
+  // accepted by the whole current OpenAI catalog.
+  const openAiNormalizedBody = normalizeOpenAiMaxTokensParameter({
+    body: normalizedBody,
+    provider: modelSelector?.provider ?? input.target?.provider,
+    model: modelSelector?.model ?? stringValue(parsedBody?.model)
+  });
   return providerProtocol === "openai_chat_completions"
-    ? usageAwareOpenAiChatBody(normalizedBody)
-    : normalizedBody;
+    ? usageAwareOpenAiChatBody(openAiNormalizedBody)
+    : openAiNormalizedBody;
 }
 
 
@@ -1079,6 +1087,40 @@ export function normalizeZaiGlm53ReasoningEffort(input: {
     }
   }
   return serializeJsonBody(next);
+}
+
+
+// OpenAI max_tokens normalization (2026-09-10): gpt-5.x and o-series models
+// reject Anthropic-style `max_tokens` ("Use 'max_completion_tokens' instead")
+// with 400 unsupported_parameter. `max_completion_tokens` is accepted by the
+// whole current OpenAI catalog, so rename unconditionally for api.openai.com
+// providers. Gated by host — other OpenAI-compatible endpoints keep their own
+// parameter contracts.
+function isOpenAiFirstPartyProvider(provider: GatewayProviderConfig | undefined): boolean {
+  const baseUrl = provider?.api_base_url ?? provider?.baseUrl ?? provider?.baseurl ?? "";
+  return baseUrl.toLowerCase().includes("api.openai.com");
+}
+
+export function normalizeOpenAiMaxTokensParameter(input: {
+  body: Buffer | undefined;
+  provider: GatewayProviderConfig | undefined;
+  model: string | undefined;
+}): Buffer | undefined {
+  if (!input.body || !isOpenAiFirstPartyProvider(input.provider)) {
+    return input.body;
+  }
+  const parsedBody = parseJsonObjectSafe(input.body);
+  if (!parsedBody || !("max_tokens" in parsedBody)) {
+    return input.body;
+  }
+  const next = { ...parsedBody };
+  const legacyValue = next.max_tokens;
+  delete next.max_tokens;
+  // An explicit max_completion_tokens (already modern) wins over the legacy value.
+  if (!("max_completion_tokens" in next) && legacyValue !== undefined && legacyValue !== null) {
+    next.max_completion_tokens = legacyValue;
+  }
+  return serializeJsonBody(next as Record<string, unknown>);
 }
 
 
