@@ -819,6 +819,47 @@ function usageAwareOpenAiChatAttemptBody(input: {
       ? providerProtocolForClientProtocol(modelSelector.provider, clientProtocol)
       : undefined
   );
+  // --- TEMPORARY DIAGNOSTIC (branch diag/zai-provider-gate) — DO NOT MERGE ---------
+  // Both provider-gated protections in this function (the L549 unicode-pattern
+  // sanitizer and the L533 glm-5.3 effort clamp) decline for Z.ai while firing for
+  // DeepSeek, so whatever is handed to them as `provider` is not identifying Z.ai.
+  // This logs the resolved selector/target shapes verbatim. Placed BEFORE the
+  // protocol gate so it fires on every path, including the early return.
+  {
+    const diagProvider = modelSelector?.provider ?? input.target?.provider;
+    const diagBase = (p: GatewayProviderConfig | undefined) =>
+      p
+        ? { api_base_url: p.api_base_url ?? null, baseUrl: p.baseUrl ?? null, baseurl: p.baseurl ?? null }
+        : null;
+    console.error("[zai-diag] " + JSON.stringify({
+      bodyModel: stringValue(parsedBody?.model),
+      clientProtocol,
+      providerProtocol,
+      selector: modelSelector
+        ? {
+            model: modelSelector.model,
+            base: diagBase(modelSelector.provider),
+            id: modelSelector.provider?.id ?? null,
+            name: modelSelector.provider?.name ?? null
+          }
+        : null,
+      target: input.target
+        ? {
+            protocol: input.target.protocol,
+            model: input.target.model ?? null,
+            base: diagBase(input.target.provider),
+            id: input.target.provider?.id ?? null,
+            name: input.target.provider?.name ?? null,
+            keys: input.target.provider ? Object.keys(input.target.provider).slice(0, 40) : null
+          }
+        : null,
+      chosenProviderKeys: diagProvider ? Object.keys(diagProvider).slice(0, 40) : null,
+      sanitizeFires: providerRejectsUnicodePropertyPatterns(diagProvider),
+      clampProviderFires: isZaiForcedThinkingProvider(diagProvider),
+      clampModelFires: isZaiForcedThinkingModel(modelSelector?.model ?? stringValue(parsedBody?.model))
+    }));
+  }
+  // ---------------------------------------------------------------------------------
   // Strip tool-schema "pattern" regexes with Unicode property escapes before the
   // attempt for any protocol — DeepSeek serves anthropic_messages by translating to
   // its OpenAI backend, so the anthropic_messages path needs this too, not just the
