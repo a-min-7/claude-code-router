@@ -20,6 +20,7 @@ import { normalizeRouteScriptResult } from "@ccr/core/routing/route-script-resul
 import type { RouteScriptRuntime } from "@ccr/core/routing/route-script-runtime";
 import { profileApiKeyId } from "@ccr/core/profiles/api-key";
 import { isModelAllowedForProfile } from "@ccr/core/profiles/model-allowlist";
+import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
 
 export { normalizeRouteSelector } from "@ccr/core/routing/model-registry";
 
@@ -191,6 +192,20 @@ export class ClaudeCodeRouterPlugin {
     }
     if (configuredDecision.rewrites.length) {
       applyRouteRewrites(configuredDecision.rewrites);
+    }
+    // Z.ai forced-thinking clamp — LAST on purpose, so neither the <CCR-SUBAGENT-THINKING> layer
+    // above nor a custom router rule can leave an illegal thinking field on a glm-5.3 target.
+    // See the block comment on applyZaiForcedThinkingClamp() for why this lives here rather than
+    // in gateway/upstream/executor.ts (which is no longer on the request path).
+    if (applyZaiForcedThinkingClamp({ body, model: configuredDecision.model, url: input.url })) {
+      input.trace?.capture({
+        changes: [],
+        decision: traceDecision,
+        kind: "mutation",
+        name: "ccr.zai-forced-thinking-clamp",
+        phase: "routing",
+        startedAtMs: Date.now()
+      });
     }
     const routedModel = configuredDecision.model?.selector ?? readString(body.model);
 
@@ -1455,12 +1470,143 @@ function buildSubagentThinkingRewrites(
     return rewrites;
   }
   // openai_chat_completions / openai_responses: strip any client thinking intent first so the
-  // executor's thinking→enable_thinking mapping has nothing to re-derive (one consistent shape),
+  // engine's thinking→enable_thinking mapping has nothing to re-derive (one consistent shape),
   // then set the canonical boolean. Effort levels are lossy → enabled, per the RFC.
+  //
+  // WARNING: for a forced-thinking Z.ai model (glm-5.3 / glm-5.3-flash) "off" produces
+  // enable_thinking:false, which Z.ai rejects with 400 code 1210 — the request CANNOT succeed.
+  // applyZaiForcedThinkingClamp() below runs after this and repairs it, so "off" stays safe to
+  // emit here; do not remove that clamp without replacing it.
   push("request.body.thinking", "delete");
   push("request.body.enable_thinking", "delete");
   push("request.body.enable_thinking", "set", value === "off" ? "false" : "true");
   return rewrites;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Z.ai forced-thinking clamp — THIS IS THE LIVE PATH. Read this before touching anything else.
+//
+// This plugin is loaded BY THE GATEWAY ENGINE (bundle key "ccr-router", resolved by
+// core-runtime/supervisor.ts from alongside next-ai-gateway.js), so it is the ONLY place in
+// this repo that can still rewrite an upstream request body.
+//
+// Everything in gateway/upstream/executor.ts belongs to the pre-v3.1.0 architecture, when this
+// fork WAS the gateway. That file is no longer on the request path. In particular
+// normalizeZaiGlm53ReasoningEffort() and sanitizeUnsupportedToolSchemaPatterns() there are DEAD
+// CODE: each has exactly one call site, inside usageAwareOpenAiChatAttemptBody(), which nothing
+// calls any more. Verified 2026-09-11 by putting a file-writing diagnostic at the top of that
+// function and restarting the Emmy gateway twice — zero output, while the diagnostic was
+// provably present in the running bundle. Do NOT "fix" the Z.ai clamp there; it will have no
+// effect on any request. The gateway engine itself (@the-next-ai/ai-gateway, bundled as
+// next-ai-gateway.js) has no clamp either — it contains no reference to glm-5.3 at all.
+//
+// WHY THE CLAMP EXISTS: GLM-5.3 and GLM-5.3-FLASH always think. Z.ai rejects any attempt to
+// disable it with HTTP 400 code 1210 — "This model always engages in thinking and cannot be
+// disabled; please use low, high, or max" — and rejects out-of-range effort values the same
+// way. Two producers feed that hazard:
+//   1. buildSubagentThinkingRewrites() above writes enable_thinking:false for
+//      <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING> on every openai target;
+//   2. any client that disables thinking — e.g. Claude Code's default
+//      output_config.effort="medium", which is valid for OpenAI but NOT for Z.ai.
+//
+// It therefore runs LAST — after the tag and after custom router rules — and deliberately wins
+// over them: a rule that re-enables thinking on a 5.3 model cannot produce a working request,
+// so letting it win would only convert a config mistake into a 400.
+// Z.AI docs: https://docs.z.ai/guides/llm/glm-5.3 + /guides/capabilities/thinking.md
+// ---------------------------------------------------------------------------------------------
+
+// Z.ai accepts only low | high | max on the 5.3 family; every other value is a 400.
+function mapZaiForcedThinkingEffort(effort: string | undefined): string | undefined {
+  if (!effort) {
+    return undefined;
+  }
+  const normalized = effort.trim().toLowerCase().replace(/[-_\s]+/g, "");
+  if (normalized === "none" || normalized === "minimal" || normalized === "low") {
+    return "low";
+  }
+  if (normalized === "medium" || normalized === "high") {
+    return "high";
+  }
+  if (normalized === "xhigh" || normalized === "ultra" || normalized === "max") {
+    return "max";
+  }
+  // Unknown — return undefined rather than guessing; the field is dropped below, so Z.ai
+  // falls back to its own default (max) instead of rejecting the request.
+  return undefined;
+}
+
+function isZaiForcedThinkingDisableIntent(value: unknown): boolean {
+  if (value === false) {
+    return true;
+  }
+  const text = readString(value) ?? readString(isRecord(value) ? value.type : undefined);
+  return text !== undefined && text.toLowerCase() === "disabled";
+}
+
+/**
+ * Repair a request bound for a Z.ai forced-thinking model, in place.
+ *
+ * Drops every field Z.ai rejects (thinking / enable_thinking / a bad effort) and re-states a
+ * legal effort in both shapes, because the engine converts output_config.effort →
+ * reasoning_effort downstream — normalizing only one of them lets the other overwrite it.
+ *
+ * @returns true when the body was changed (so the caller can trace it).
+ */
+function applyZaiForcedThinkingClamp(input: {
+  body: Record<string, unknown>;
+  model: RouteModelRef | undefined;
+  url: string;
+}): boolean {
+  const resolved = input.model;
+  if (!resolved || resolved.kind !== "provider" || !isZaiForcedThinkingModel(resolved.model)) {
+    return false;
+  }
+  const clientProtocol = requestProtocolForPath(input.url);
+  const protocol = clientProtocol
+    ? providerProtocolForClientProtocol(resolved.provider, clientProtocol)
+    : undefined;
+  if (protocol !== "openai_chat_completions" && protocol !== "openai_responses") {
+    return false;
+  }
+
+  const body = input.body;
+  const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
+  const hasReasoningEffort = "reasoning_effort" in body;
+  const hasOutputEffort = outputConfig !== undefined && "effort" in outputConfig;
+  const hasThinking = "thinking" in body;
+  const hasEnableThinking = "enable_thinking" in body;
+  if (!hasReasoningEffort && !hasOutputEffort && !hasThinking && !hasEnableThinking) {
+    return false;
+  }
+
+  // An explicit valid effort wins over a disable intent (a client may ask for thinking off AND
+  // max reasoning); a disable intent alone means "as close to off as this model allows".
+  let effort = hasReasoningEffort
+    ? mapZaiForcedThinkingEffort(readString(body.reasoning_effort))
+    : undefined;
+  if (effort === undefined && hasOutputEffort) {
+    effort = mapZaiForcedThinkingEffort(readString(outputConfig?.effort));
+  }
+  if (
+    effort === undefined &&
+    (isZaiForcedThinkingDisableIntent(body.thinking) || body.enable_thinking === false)
+  ) {
+    effort = "low";
+  }
+
+  delete body.thinking;
+  delete body.enable_thinking;
+  delete body.reasoning_effort;
+  if (outputConfig !== undefined) {
+    delete outputConfig.effort;
+  }
+  if (effort !== undefined) {
+    body.reasoning_effort = effort;
+    if (hasOutputEffort && outputConfig !== undefined) {
+      outputConfig.effort = effort;
+    }
+  }
+  return true;
 }
 
 async function resolveRouterRule(

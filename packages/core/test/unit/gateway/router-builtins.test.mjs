@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ClaudeCodeRouterPlugin } from "@ccr/core/gateway/claude-code-router-plugin.ts";
-import { fetchUpstreamWithFallback, normalizeZaiGlm53ReasoningEffort } from "@ccr/core/gateway/upstream/executor.ts";
+import { fetchUpstreamWithFallback } from "@ccr/core/gateway/upstream/executor.ts";
 import { RequestRouteTraceRecorder } from "@ccr/core/observability/route-trace.ts";
 import { profileApiKeyId } from "@ccr/core/profiles/api-key.ts";
 import {
@@ -3454,43 +3454,124 @@ test("custom router rule thinking rewrite wins over the built-in subagent thinki
   assert.equal(result.body.enable_thinking, true);
 });
 
-// The tag's openai rewrite sets enable_thinking to a canonical boolean, so "off" emits
-// enable_thinking:false — the exact field Z.ai rejects for the forced-thinking 5.3 family
-// (400 code 1210, "This model always engages in thinking and cannot be disabled"). This pins
-// the tag→clamp interaction end-to-end: whatever the tag writes, the executor clamp must hand
-// Z.ai a legal body. Without it, "off" silently 400s on glm-5.3 whenever the clamp declines.
-test("subagent thinking off on glm-5.3 is repaired by the Z.ai effort clamp", async () => {
-  const zaiProvider = {
+// ---- Z.ai forced-thinking clamp — THE LIVE PATH (plugin, not executor.ts) ----
+//
+// This plugin is what the gateway engine loads (bundle key "ccr-router"), so it is the only
+// place that can still rewrite an upstream body. GLM-5.3 / GLM-5.3-FLASH always think: Z.ai
+// answers any attempt to disable it with 400 code 1210, and rejects out-of-range effort values
+// the same way. The equivalent clamp in gateway/upstream/executor.ts is orphaned — see the
+// banner there. If these tests ever go red, fix applyZaiForcedThinkingClamp(); do NOT
+// "restore" the executor copy, which no request reaches.
+
+function zaiForcedThinkingProviderFixture() {
+  return [{
     api_base_url: "https://api.z.ai/api/paas/v4",
     id: "z.ai-global---general-endpoint",
-    models: ["glm-5.3", "glm-5.3-flash"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"],
     name: "Z.ai (Global) - General Endpoint",
     type: "openai_chat_completions"
-  };
-  const profileModel = "Z.ai (Global) - General Endpoint/glm-5.3-flash";
-  const plugin = createRouterPlugin({ profileModel, providers: [zaiProvider] });
-  const result = await plugin.routeRequest({
+  }];
+}
+
+function zaiForcedThinkingPlugin(model = "glm-5.3") {
+  return createRouterPlugin({
+    profileModel: `Z.ai (Global) - General Endpoint/${model}`,
+    providers: zaiForcedThinkingProviderFixture()
+  });
+}
+
+// Mirrors what a real client sends: the Claude Code user-agent is what resolves the built-in
+// route to the configured Z.ai model. Without it no model resolves and the clamp has nothing
+// to act on — which is itself worth remembering when debugging a "clamp did not fire" report.
+function zaiRoute({ body, model = "glm-5.3", url = "/v1/messages" }) {
+  return zaiForcedThinkingPlugin(model).routeRequest({
+    body,
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url
+  });
+}
+
+test("Z.ai 5.3: <CCR-SUBAGENT-THINKING>off never reaches the wire as enable_thinking:false", async () => {
+  const result = await zaiRoute({
     body: {
       messages: [],
       model: "claude-default",
       system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
     },
+    model: "glm-5.3-flash"
+  });
+
+  assert.ok(!("enable_thinking" in result.body), "enable_thinking must not reach Z.ai");
+  assert.equal(result.body.reasoning_effort, "low");
+});
+
+test("Z.ai 5.3: a client's output_config.effort medium is normalized to high", async () => {
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "medium" } }
+  });
+
+  assert.equal(result.body.reasoning_effort, "high");
+  assert.equal(result.body.output_config.effort, "high");
+});
+
+test("Z.ai 5.3: a client's enable_thinking:false becomes reasoning_effort low", async () => {
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", enable_thinking: false },
+    url: "/v1/chat/completions"
+  });
+
+  assert.ok(!("enable_thinking" in result.body), "enable_thinking removed");
+  assert.equal(result.body.reasoning_effort, "low");
+});
+
+test("Z.ai 5.3: thinking.type disabled becomes reasoning_effort low", async () => {
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", thinking: { type: "disabled" } },
+    url: "/v1/chat/completions"
+  });
+
+  assert.ok(!("thinking" in result.body), "thinking removed");
+  assert.equal(result.body.reasoning_effort, "low");
+});
+
+test("Z.ai 5.3: an explicit valid effort survives a disable intent", async () => {
+  const result = await zaiRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      output_config: { effort: "max" },
+      thinking: { type: "disabled" }
+    }
+  });
+
+  assert.ok(!("thinking" in result.body));
+  assert.equal(result.body.reasoning_effort, "max");
+});
+
+test("Z.ai 5.2 is left alone — it accepts medium", async () => {
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "medium" } },
+    model: "glm-5.2"
+  });
+
+  assert.equal(result.body.output_config.effort, "medium");
+  assert.ok(!("reasoning_effort" in result.body), "no clamp applied to a non-5.3 model");
+});
+
+test("a non-Z.ai openai target is left alone by the clamp", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: { messages: [], model: "claude-default", output_config: { effort: "medium" } },
     headers: { "user-agent": "Claude Code" },
     method: "POST",
     url: "/v1/messages"
   });
 
-  // Step 1 — the tag produces the hazardous field.
-  assert.equal(result.body.enable_thinking, false, "tag rewrite writes enable_thinking:false");
-
-  // Step 2 — the clamp must repair it, using the model the executor would see.
-  const repaired = normalizeZaiGlm53ReasoningEffort({
-    body: Buffer.from(JSON.stringify(result.body)),
-    provider: zaiProvider,
-    model: result.body.model
-  });
-  const out = JSON.parse(repaired.toString("utf8"));
-  assert.ok(!("enable_thinking" in out), "enable_thinking removed before it reaches Z.ai");
-  assert.equal(out.reasoning_effort, "low");
+  assert.equal(result.body.output_config.effort, "medium");
+  assert.ok(!("reasoning_effort" in result.body), "clamp must not touch non-Z.ai providers");
 });
 

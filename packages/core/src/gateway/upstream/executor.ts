@@ -998,6 +998,27 @@ export function sanitizeUnsupportedToolSchemaPatterns(input: {
 }
 
 
+// =============================================================================================
+// ORPHANED — DO NOT FIX THE Z.AI CLAMP HERE (and the same applies to
+// sanitizeUnsupportedToolSchemaPatterns above). The live clamp lives in
+// gateway/claude-code-router-plugin.ts → applyZaiForcedThinkingClamp().
+//
+// This whole module is pre-v3.1.0 architecture, when this fork WAS the gateway. Since the
+// v3.1.0 rebase the gateway engine (@the-next-ai/ai-gateway, bundled as
+// packages/cli/dist/main/next-ai-gateway.js and loaded by core-runtime/gateway-bootstrap.js)
+// prepares every upstream request, and this file is no longer on that path.
+//
+// normalizeZaiGlm53ReasoningEffort (below) and sanitizeUnsupportedToolSchemaPatterns both have
+// exactly ONE call site, inside usageAwareOpenAiChatAttemptBody, which nothing calls any more.
+// Verified 2026-09-11: a file-writing diagnostic at the top of that function produced ZERO
+// output across two Emmy gateway restarts, while being provably present in the running bundle.
+// Their unit tests (test/unit/gateway/zai-glm53-effort-clamp.test.mjs) still pass because they
+// call these functions directly — they never exercised the wiring, which is exactly how this
+// rotted unnoticed after the v3.1.0 rebase.
+//
+// Fixing anything here changes NOTHING for a real request. Move it to the plugin.
+// =============================================================================================
+//
 // Z.ai glm-5.3 forced-thinking effort clamp (2026-09-04):
 // GLM-5.3 / GLM-5.3-FLASH are forced-thinking models that accept only
 // reasoning_effort ∈ {low, high, max}. Claude Code's default effort is
