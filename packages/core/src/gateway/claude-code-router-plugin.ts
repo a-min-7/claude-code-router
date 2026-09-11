@@ -1381,6 +1381,16 @@ function extractAndRemoveSubagentThinkingTagFromText(
   return value;
 }
 
+// requestProtocolForPath matches the pathname EXACTLY, so a real client request — Claude Code
+// sends "/v1/messages?beta=true" — resolves to undefined, and every URL-keyed decision in this
+// file then silently declines. That is not theoretical: it kept both the <CCR-SUBAGENT-THINKING>
+// tag and the Z.ai forced-thinking clamp from ever firing on live traffic, while passing every
+// hand-rolled probe (which used a bare path). Always resolve the protocol through here.
+function requestProtocolForRequestUrl(url: string): GatewayProviderProtocol | undefined {
+  const queryIndex = url.search(/[?#]/);
+  return requestProtocolForPath(queryIndex === -1 ? url : url.slice(0, queryIndex));
+}
+
 // <CCR-SUBAGENT-THINKING> → body-field mapping (RFC docs/rfc/subagent-thinking-tag.md §3).
 // The table is keyed by the provider protocol the request will actually ride, computed the
 // same way the executor does (providerProtocolForClientProtocol against the request path).
@@ -1431,7 +1441,7 @@ function resolveSubagentThinkingEffect(input: {
       rewrites: []
     };
   }
-  const clientProtocol = requestProtocolForPath(input.url);
+  const clientProtocol = requestProtocolForRequestUrl(input.url);
   const protocol = clientProtocol
     ? providerProtocolForClientProtocol(resolvedModel.provider, clientProtocol)
     : undefined;
@@ -1574,7 +1584,7 @@ function applyZaiForcedThinkingClamp(input: {
   if (!resolved || resolved.kind !== "provider" || !isZaiForcedThinkingModel(resolved.model)) {
     return false;
   }
-  const clientProtocol = requestProtocolForPath(input.url);
+  const clientProtocol = requestProtocolForRequestUrl(input.url);
   const protocol = clientProtocol
     ? providerProtocolForClientProtocol(resolved.provider, clientProtocol)
     : undefined;

@@ -3692,3 +3692,52 @@ test("a provider that accepts \\p{...} keeps its pattern", async () => {
   );
 });
 
+// ---- the real client URL carries a query string ----
+//
+// Claude Code sends "/v1/messages?beta=true", never a bare path. requestProtocolForPath matches
+// the pathname EXACTLY, so an unstripped URL resolves to undefined and every URL-keyed decision
+// in the plugin silently declines — which is how both the clamp and the tag missed live traffic
+// for as long as they did, while passing hand-rolled probes that used a bare path.
+
+test("Z.ai 5.3: the clamp fires on the real client URL (/v1/messages?beta=true)", async () => {
+  // The shape Claude Code actually sends: adaptive thinking plus a medium effort.
+  const result = await zaiRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      thinking: { type: "adaptive", display: "omitted" },
+      output_config: { effort: "medium" }
+    },
+    url: "/v1/messages?beta=true"
+  });
+
+  assert.ok(!("thinking" in result.body), "thinking is stripped on the real URL");
+  assert.equal(result.body.reasoning_effort, "high");
+});
+
+test("Z.ai 5.3: adaptive thinking with no stated effort leaves Z.ai's default alone", async () => {
+  // "adaptive" is neither an enable nor a disable intent, and it states no level — so the field
+  // is unusable either way and is dropped, but no effort is invented for it.
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", thinking: { type: "adaptive" } },
+    url: "/v1/messages?beta=true"
+  });
+
+  assert.ok(!("thinking" in result.body), "the unusable thinking field is dropped");
+  assert.ok(!("reasoning_effort" in result.body), "no effort is invented");
+});
+
+test("Z.ai 5.3: the subagent-thinking tag fires on the real client URL", async () => {
+  const result = await zaiRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    url: "/v1/messages?beta=true"
+  });
+
+  assert.ok(!("enable_thinking" in result.body), "enable_thinking must not reach Z.ai");
+  assert.equal(result.body.reasoning_effort, "low");
+});
+
