@@ -160,3 +160,49 @@ test("returns body unchanged when model is undefined", () => {
   const orig = buf({ model: "glm-5.3", messages: [], output_config: { effort: "medium" } });
   assert.equal(normalizeZaiGlm53ReasoningEffort({ body: orig, provider: zaiProvider, model: undefined }), orig);
 });
+
+// When no modelSelector resolves, the executor falls back to the raw body.model,
+// which is the provider-prefixed name. The clamp matched bare ids only, so it was
+// inert on that path — and a prefixed glm-5.3 carrying a disable intent reached
+// Z.ai unchanged and came back 400 code 1210.
+const prefixedFlash = "Z.ai (Global) - General Endpoint/glm-5.3-flash";
+const prefixedGlm53 = "Z.ai (Global) - General Endpoint/glm-5.3";
+
+test("clamps a provider-prefixed glm-5.3-flash (modelSelector fallback path)", () => {
+  const out = parse(normalizeZaiGlm53ReasoningEffort({
+    body: buf({ model: prefixedFlash, messages: [], output_config: { effort: "medium" } }),
+    provider: zaiProvider,
+    model: prefixedFlash
+  }));
+  assert.equal(out.output_config.effort, "high");
+  assert.equal(out.reasoning_effort, "high");
+});
+
+test("clamps the resolver's prefixed enable_thinking:false request to reasoning_effort low", () => {
+  const out = parse(normalizeZaiGlm53ReasoningEffort({
+    body: buf({ model: prefixedFlash, messages: [], tool_choice: "auto", enable_thinking: false }),
+    provider: zaiProvider,
+    model: prefixedFlash
+  }));
+  assert.ok(!("enable_thinking" in out), "enable_thinking removed");
+  assert.equal(out.reasoning_effort, "low");
+});
+
+test("clamps a provider-prefixed glm-5.3 with thinking.type disabled", () => {
+  const out = parse(normalizeZaiGlm53ReasoningEffort({
+    body: buf({ model: prefixedGlm53, messages: [], thinking: { type: "disabled" } }),
+    provider: zaiProvider,
+    model: prefixedGlm53
+  }));
+  assert.ok(!("thinking" in out), "thinking removed");
+  assert.equal(out.reasoning_effort, "low");
+});
+
+test("does NOT clamp a provider-prefixed Z.ai model outside the 5.3 family", () => {
+  const prefixed52 = "Z.ai (Global) - General Endpoint/glm-5.2";
+  const orig = buf({ model: prefixed52, messages: [], output_config: { effort: "medium" } });
+  assert.equal(
+    normalizeZaiGlm53ReasoningEffort({ body: orig, provider: zaiProvider, model: prefixed52 }),
+    orig
+  );
+});
