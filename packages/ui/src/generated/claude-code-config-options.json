@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-10T06:44:07.582Z",
+  "generatedAt": "2026-09-11T12:42:21.782Z",
   "generatedBy": "scripts/generate-claude-code-config-options.mjs",
   "sourceUrls": {
     "envEn": "https://code.claude.com/docs/en/env-vars.md",
@@ -78,7 +78,7 @@
         "allowedChannelPlugins"
       ],
       "scope": "Managed",
-      "type": "array of objects, each with marketplace and plugin strings",
+      "type": "array of objects, each with marketplace and plugin strings. An entry can instead be a \"plugin@marketplace\" string such as \"telegram@claude-plugins-official\", which Claude Code treats as the equivalent object. The string form requires Claude Code v2.1.267 or later; earlier versions reject the whole allowedChannelPlugins value when it contains one",
       "default": "unset, so Claude Code uses the default Anthropic allowlist",
       "example": "{\n  \"channelsEnabled\": true,\n  \"allowedChannelPlugins\": [\n    { \"marketplace\": \"claude-plugins-official\", \"plugin\": \"telegram\" }\n  ]\n}",
       "valueKind": "array",
@@ -1541,8 +1541,8 @@
       "valueKind": "object",
       "enumValues": [],
       "description": {
-        "en": "Cap the effort level a session can use, leaving lower levels available. Any higher level runs at the cap instead, including one from /effort, the /model picker, --effort, CLAUDE_CODE_EFFORT_LEVEL, or the model's own default. Claude Code applies the cap itself before each request, so it holds on every provider, including Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. Requires Claude Code v2.1.267 or later.",
-        "zh": "Cap the effort level a session can use, leaving lower levels available. Any higher level runs at the cap instead, including one from /effort, the /model picker, --effort, CLAUDE_CODE_EFFORT_LEVEL, or the model's own default. Claude Code applies the cap itself before each request, so it holds on every provider, including Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. Requires Claude Code v2.1.267 or later."
+        "en": "Cap the effort level a session can use, leaving lower levels available. Any higher level runs at the cap instead, including one from /effort, the /model picker, --effort, CLAUDE_CODE_EFFORT_LEVEL, a skill's or subagent's effort frontmatter, or the model's own default. Claude Code applies the cap itself before each request, so it holds on every provider, including Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. Requires Claude Code v2.1.267 or later.",
+        "zh": "Cap the effort level a session can use, leaving lower levels available. Any higher level runs at the cap instead, including one from /effort, the /model picker, --effort, CLAUDE_CODE_EFFORT_LEVEL, a skill's or subagent's effort frontmatter, or the model's own default. Claude Code applies the cap itself before each request, so it holds on every provider, including Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. Requires Claude Code v2.1.267 or later."
       }
     },
     {
@@ -4991,7 +4991,7 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to get the task-tracking tools on the models listed under Task tool availability, where Claude Code otherwise leaves them out. CLAUDE_CODE_ENABLE_TASKS still selects the Task tools or TodoWrite. Requires Claude Code v2.1.233 or later",
+        "en": "Set to 1 to get the task-tracking tools on every model. Without it, Claude Code provides them by default only on the models listed under Task tool availability. CLAUDE_CODE_ENABLE_TASKS still selects the Task tools or TodoWrite. Requires Claude Code v2.1.233 or later",
         "zh": "设置为 1 以在 任务工具可用性 下列出的模型上获取任务跟踪工具，Claude Code 否则会将其排除。CLAUDE_CODE_ENABLE_TASKS 仍选择 Task 工具或 TodoWrite。需要 Claude Code v2.1.233 或更高版本"
       }
     },
@@ -5073,7 +5073,7 @@
       "valueKind": "boolean-string",
       "description": {
         "en": "Set to 1 to emit subagent text and thinking blocks in claude -p --output-format stream-json output, the same behavior as the --forward-subagent-text flag. Use the variable when a harness invokes claude and can't pass the flag itself. Unlike the flag, which exits with an error outside non-interactive mode with stream-json output, the variable is ignored there so that nested invocations keep working when it's set process-wide. Requires Claude Code v2.1.211 or later",
-        "zh": "设置为 1 以在 claude -p --output-format stream-json 输出中发出 子代理 文本和思考块，与 --forward-subagent-text 标志相同的行为。当工具调用 claude 的工具无法自己传递标志时使用该变量。与标志不同，标志在非交互模式下使用 stream-json 输出时以错误退出，变量在那里被忽略，以便嵌套调用在设置进程范围时继续工作。需要 Claude Code v2.1.211 或更高版本"
+        "zh": "设置为 1 以在 claude -p --output-format stream-json 输出中发出 子代理 文本和思考块，与 --forward-subagent-text 标志相同的行为。当某个外部工具（harness）调用 claude 而自身无法传递该标志时，请使用该变量。与标志不同，标志在带 stream-json 输出的非交互模式之外使用时会以错误退出，而变量在那里会被忽略，以便在进程范围内设置该变量时嵌套调用仍能继续工作。需要 Claude Code v2.1.211 或更高版本"
       }
     },
     {
@@ -6004,6 +6004,15 @@
       }
     },
     {
+      "key": "CLAUDE_CODE_WEBFETCH_DEADLINE_MS",
+      "example": "0",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Upper bound in milliseconds on how long WebFetch waits for a page to download, including any redirects it follows. A download that hasn't completed by then fails with a deadline error. The default is 300000, which is five minutes. Set to 0 to remove the limit. Takes plain digits only; a decimal or any other spelling keeps the default. Requires Claude Code v2.1.268 or later",
+        "zh": "Upper bound in milliseconds on how long WebFetch waits for a page to download, including any redirects it follows. A download that hasn't completed by then fails with a deadline error. The default is 300000, which is five minutes. Set to 0 to remove the limit. Takes plain digits only; a decimal or any other spelling keeps the default. Requires Claude Code v2.1.268 or later"
+      }
+    },
+    {
       "key": "CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS",
       "example": "0",
       "valueKind": "boolean-string",
@@ -6513,7 +6522,7 @@
       "valueKind": "boolean-string",
       "description": {
         "en": "Controls whether startup waits for MCP servers to connect before the first query. MCP startup is non-blocking by default: servers connect in the background and their tools become available as they finish. Set to 0 to make Claude Code wait for servers to connect before the first query. Servers configured with alwaysLoad: true still make startup wait regardless, except when served from the discovery cache, since their tools must be present when the first prompt is built. In non-interactive mode (-p), Claude Code also waits for still-pending servers before the first turn regardless of this variable, with a longer deadline when you pass --mcp-config explicitly; see that flag's entry for the cached-server exception",
-        "zh": "控制启动是否在第一个查询之前等待 MCP 服务器连接。MCP 启动默认非阻塞：服务器在后台连接，它们的工具在完成时变为可用。设置为 0 以使 Claude Code 在第一个查询之前等待服务器连接。配置为 alwaysLoad: true 的服务器仍使启动等待，除非从 发现缓存 提供，因为它们的工具必须在构建第一个提示时存在。在非交互模式（-p）中，Claude Code 也在第一个转之前等待仍待处理的服务器，当您显式传递 --mcp-config 时有更长的截止时间；请参阅该标志的条目了解缓存服务器异常"
+        "zh": "控制启动是否在第一个查询之前等待 MCP 服务器连接。MCP 启动默认非阻塞：服务器在后台连接，它们的工具在完成时变为可用。设置为 0 以使 Claude Code 在第一个查询之前等待服务器连接。配置为 alwaysLoad: true 的服务器仍使启动等待，除非从 发现缓存 提供，因为它们的工具必须在构建第一个提示时存在。在非交互模式（-p）中，Claude Code 也在第一个转之前等待仍待处理的服务器，当您显式传递 --mcp-config 时有更长的截止时间；请参阅该标志的条目了解缓存服务器的例外情况"
       }
     },
     {
@@ -6567,7 +6576,7 @@
       "valueKind": "string",
       "description": {
         "en": "On the v2 MCP client runtime only, whether Claude Code probes servers for MCP protocol revision 2026-07-28. Set auto to probe HTTP, claude.ai connector, and stdio servers; a server that doesn't answer the probe connects on the earlier protocol instead, as SSE and WebSocket servers always do. Set legacy to skip the probe for every server. Without the variable, Claude Code probes HTTP and claude.ai connector servers on Claude Code v2.1.232 or later, with the exceptions the MCP client runtimes section lists. Any other value is ignored with a warning in the debug log. Requires Claude Code v2.1.221 or later",
-        "zh": "仅在 v2 MCP 客户端运行时 上，Claude Code 是否探测服务器以获取 MCP 协议修订版 2026-07-28。设置 auto 以探测 HTTP、claude.ai 连接器和 stdio 服务器；不回答探测的服务器在较早的协议上连接，SSE 和 WebSocket 服务器始终这样做。设置 legacy 以跳过每个服务器的探测。没有变量，Claude Code 在 Claude Code v2.1.232 或更高版本上探测 HTTP 和 claude.ai 连接器服务器，除了 MCP 客户端运行时 部分列出的异常。任何其他值被忽略并在调试日志中显示警告。需要 Claude Code v2.1.221 或更高版本"
+        "zh": "仅在 v2 MCP 客户端运行时 上，Claude Code 是否探测服务器以获取 MCP 协议修订版 2026-07-28。设置 auto 以探测 HTTP、claude.ai 连接器和 stdio 服务器；不回答探测的服务器在较早的协议上连接，SSE 和 WebSocket 服务器始终这样做。设置 legacy 以跳过每个服务器的探测。没有变量，Claude Code 在 Claude Code v2.1.232 或更高版本上探测 HTTP 和 claude.ai 连接器服务器，但 MCP 客户端运行时 部分列出的例外情况除外。任何其他值被忽略并在调试日志中显示警告。需要 Claude Code v2.1.221 或更高版本"
       }
     },
     {
