@@ -3549,6 +3549,45 @@ test("Z.ai 5.3: an explicit valid effort survives a disable intent", async () =>
   assert.equal(result.body.reasoning_effort, "max");
 });
 
+// Claude Code changes its effort level on its own, and may add levels Z.ai has never heard of.
+// The clamp must therefore be a MAPPING, never a hardwired level: anything Z.ai already accepts
+// has to survive verbatim, and only values outside low|high|max get moved to the nearest legal
+// one. If these go red, someone has "simplified" the clamp into setting a fixed value.
+test("Z.ai 5.3: every legal effort level passes through verbatim", async () => {
+  for (const level of ["low", "high", "max"]) {
+    const result = await zaiRoute({
+      body: { messages: [], model: "claude-default", output_config: { effort: level } }
+    });
+    assert.equal(result.body.reasoning_effort, level, `${level} must survive the clamp`);
+    assert.equal(result.body.output_config.effort, level, `${level} must not be rewritten`);
+  }
+});
+
+test("Z.ai 5.3: only levels Z.ai rejects are mapped to the nearest legal one", async () => {
+  const cases = [
+    ["none", "low"],
+    ["minimal", "low"],
+    ["medium", "high"],
+    ["xhigh", "max"],
+    ["ultra", "max"]
+  ];
+  for (const [sent, expected] of cases) {
+    const result = await zaiRoute({
+      body: { messages: [], model: "claude-default", output_config: { effort: sent } }
+    });
+    assert.equal(result.body.reasoning_effort, expected, `${sent} should become ${expected}`);
+  }
+});
+
+test("Z.ai 5.3: an unrecognised effort is dropped, not guessed", async () => {
+  const result = await zaiRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "quantum" } }
+  });
+
+  assert.ok(!("reasoning_effort" in result.body), "no invented effort is sent");
+  assert.ok(!("effort" in result.body.output_config), "the rejected value is removed");
+});
+
 test("Z.ai 5.2 is left alone — it accepts medium", async () => {
   const result = await zaiRoute({
     body: { messages: [], model: "claude-default", output_config: { effort: "medium" } },
