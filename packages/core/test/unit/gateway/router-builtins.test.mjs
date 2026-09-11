@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ClaudeCodeRouterPlugin } from "@ccr/core/gateway/claude-code-router-plugin.ts";
-import { fetchUpstreamWithFallback } from "@ccr/core/gateway/upstream/executor.ts";
+import { fetchUpstreamWithFallback, normalizeZaiGlm53ReasoningEffort } from "@ccr/core/gateway/upstream/executor.ts";
 import { RequestRouteTraceRecorder } from "@ccr/core/observability/route-trace.ts";
 import { profileApiKeyId } from "@ccr/core/profiles/api-key.ts";
 import {
@@ -3452,5 +3452,45 @@ test("custom router rule thinking rewrite wins over the built-in subagent thinki
   });
 
   assert.equal(result.body.enable_thinking, true);
+});
+
+// The tag's openai rewrite sets enable_thinking to a canonical boolean, so "off" emits
+// enable_thinking:false — the exact field Z.ai rejects for the forced-thinking 5.3 family
+// (400 code 1210, "This model always engages in thinking and cannot be disabled"). This pins
+// the tag→clamp interaction end-to-end: whatever the tag writes, the executor clamp must hand
+// Z.ai a legal body. Without it, "off" silently 400s on glm-5.3 whenever the clamp declines.
+test("subagent thinking off on glm-5.3 is repaired by the Z.ai effort clamp", async () => {
+  const zaiProvider = {
+    api_base_url: "https://api.z.ai/api/paas/v4",
+    id: "z.ai-global---general-endpoint",
+    models: ["glm-5.3", "glm-5.3-flash"],
+    name: "Z.ai (Global) - General Endpoint",
+    type: "openai_chat_completions"
+  };
+  const profileModel = "Z.ai (Global) - General Endpoint/glm-5.3-flash";
+  const plugin = createRouterPlugin({ profileModel, providers: [zaiProvider] });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  // Step 1 — the tag produces the hazardous field.
+  assert.equal(result.body.enable_thinking, false, "tag rewrite writes enable_thinking:false");
+
+  // Step 2 — the clamp must repair it, using the model the executor would see.
+  const repaired = normalizeZaiGlm53ReasoningEffort({
+    body: Buffer.from(JSON.stringify(result.body)),
+    provider: zaiProvider,
+    model: result.body.model
+  });
+  const out = JSON.parse(repaired.toString("utf8"));
+  assert.ok(!("enable_thinking" in out), "enable_thinking removed before it reaches Z.ai");
+  assert.equal(out.reasoning_effort, "low");
 });
 
