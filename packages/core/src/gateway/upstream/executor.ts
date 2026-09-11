@@ -1,6 +1,7 @@
 /**
  * Extracted from gateway/service.ts. Keep this module focused on its named gateway boundary.
  */
+import { appendFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import type { AppConfig, GatewayProviderConfig, GatewayProviderProtocol, ProviderCredentialConfig, RequestRouteTraceChange, RouterFallbackConfig } from "@ccr/core/contracts/app";
 import { fetchWithSystemProxy } from "@ccr/core/proxy/system-proxy-fetch";
@@ -831,7 +832,11 @@ function usageAwareOpenAiChatAttemptBody(input: {
       p
         ? { api_base_url: p.api_base_url ?? null, baseUrl: p.baseUrl ?? null, baseurl: p.baseurl ?? null }
         : null;
-    console.error("[zai-diag] " + JSON.stringify({
+    // The daemon child is spawned with stdio:"ignore", so console.* goes to /dev/null
+    // — write to an explicit file instead. Wrapped so a logging failure can never
+    // affect request handling.
+    try {
+      appendFileSync("/tmp/zai-diag.log", "[zai-diag] " + JSON.stringify({
       bodyModel: stringValue(parsedBody?.model),
       clientProtocol,
       providerProtocol,
@@ -857,7 +862,10 @@ function usageAwareOpenAiChatAttemptBody(input: {
       sanitizeFires: providerRejectsUnicodePropertyPatterns(diagProvider),
       clampProviderFires: isZaiForcedThinkingProvider(diagProvider),
       clampModelFires: isZaiForcedThinkingModel(modelSelector?.model ?? stringValue(parsedBody?.model))
-    }));
+      }) + "\n");
+    } catch {
+      // never let a diagnostic break the gateway
+    }
   }
   // ---------------------------------------------------------------------------------
   // Strip tool-schema "pattern" regexes with Unicode property escapes before the
