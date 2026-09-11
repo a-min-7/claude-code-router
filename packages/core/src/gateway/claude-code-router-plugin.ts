@@ -197,6 +197,19 @@ export class ClaudeCodeRouterPlugin {
     // above nor a custom router rule can leave an illegal thinking field on a glm-5.3 target.
     // See the block comment on applyZaiForcedThinkingClamp() for why this lives here rather than
     // in gateway/upstream/executor.ts (which is no longer on the request path).
+    // Provider-hygiene passes for the resolved target. Both are ported from the now-orphaned
+    // gateway/upstream/executor.ts; see their block comments. The strip runs first so the clamp
+    // sees a body already free of rejected schema metadata.
+    if (applyUnicodePropertyPatternStrip({ body, model: configuredDecision.model })) {
+      input.trace?.capture({
+        changes: [],
+        decision: traceDecision,
+        kind: "mutation",
+        name: "ccr.unicode-property-pattern-strip",
+        phase: "routing",
+        startedAtMs: Date.now()
+      });
+    }
     if (applyZaiForcedThinkingClamp({ body, model: configuredDecision.model, url: input.url })) {
       input.trace?.capture({
         changes: [],
@@ -1607,6 +1620,68 @@ function applyZaiForcedThinkingClamp(input: {
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unicode property-escape strip — same LIVE-PATH story as the clamp above.
+//
+// DeepSeek's anthropic_messages bridge and Z.ai both run OpenAI-compatible validators that
+// reject `\p{...}` as "not a regex" and answer 400, which surfaces as
+// "All target providers failed." Claude Code's Artifact tool ships exactly such a pattern
+// (`\p{Cc}\p{Cf}\p{Zl}\p{Zp}`), so EVERY Claude Code request to those providers used to fail.
+//
+// These pattern fields are validation-only metadata: dropping one relaxes an input constraint
+// but never changes tool semantics. The strip is protocol-agnostic and runs for any request
+// shape, because the provider may translate between protocols downstream.
+//
+// Ported from gateway/upstream/executor.ts:sanitizeUnsupportedToolSchemaPatterns(), which is
+// ORPHANED — the v3.1.0 rebase took that file off the request path (see the clamp's block
+// comment). Fix that copy and no request changes; fix this one and every request does.
+// ---------------------------------------------------------------------------------------------
+const providersRejectingUnicodePropertyPatterns = ["api.deepseek.com", "api.z.ai"];
+
+function stripUnicodePropertyPatternsInPlace(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    let changed = false;
+    for (const item of value) {
+      if (stripUnicodePropertyPatternsInPlace(item)) {
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  if (isRecord(value)) {
+    let changed = false;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "pattern" && typeof child === "string" && child.includes("\\p{")) {
+        delete value[key];
+        changed = true;
+        continue;
+      }
+      if (stripUnicodePropertyPatternsInPlace(child)) {
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  return false;
+}
+
+function applyUnicodePropertyPatternStrip(input: {
+  body: Record<string, unknown>;
+  model: RouteModelRef | undefined;
+}): boolean {
+  const resolved = input.model;
+  if (!resolved || resolved.kind !== "provider") {
+    return false;
+  }
+  const baseUrl = String(
+    resolved.provider.api_base_url ?? resolved.provider.baseUrl ?? resolved.provider.baseurl ?? ""
+  ).toLowerCase();
+  if (!providersRejectingUnicodePropertyPatterns.some((host) => baseUrl.includes(host))) {
+    return false;
+  }
+  return stripUnicodePropertyPatternsInPlace(input.body);
 }
 
 async function resolveRouterRule(

@@ -3614,3 +3614,81 @@ test("a non-Z.ai openai target is left alone by the clamp", async () => {
   assert.ok(!("reasoning_effort" in result.body), "clamp must not touch non-Z.ai providers");
 });
 
+// ---- unicode property-escape strip — live path, same story as the clamp ----
+//
+// Claude Code's Artifact tool ships a `pattern` using Unicode property escapes, which Z.ai and
+// DeepSeek reject as "not a regex" with 400. Without this strip EVERY Claude Code request to
+// those providers fails, whatever the thinking settings are.
+
+test("Z.ai: a \\p{...} tool pattern is stripped before it reaches the validator", async () => {
+  const result = await zaiRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      tools: [{
+        name: "Artifact",
+        description: "d",
+        input_schema: {
+          type: "object",
+          properties: { x: { type: "string", pattern: "^[\\p{Cc}\\p{Cf}]+$" } },
+          required: ["x"]
+        }
+      }]
+    }
+  });
+
+  assert.equal(
+    result.body.tools[0].input_schema.properties.x.pattern,
+    undefined,
+    "the rejected pattern is dropped"
+  );
+  assert.equal(
+    result.body.tools[0].input_schema.properties.x.type,
+    "string",
+    "the rest of the schema survives"
+  );
+});
+
+test("Z.ai: an ordinary tool pattern is preserved", async () => {
+  const result = await zaiRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      tools: [{
+        name: "t",
+        description: "d",
+        input_schema: { type: "object", properties: { x: { type: "string", pattern: "^[a-z]+$" } } }
+      }]
+    }
+  });
+
+  assert.equal(result.body.tools[0].input_schema.properties.x.pattern, "^[a-z]+$");
+});
+
+test("a provider that accepts \\p{...} keeps its pattern", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      tools: [{
+        name: "t",
+        description: "d",
+        input_schema: { type: "object", properties: { x: { type: "string", pattern: "^[\\p{Cc}]+$" } } }
+      }]
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(
+    result.body.tools[0].input_schema.properties.x.pattern,
+    "^[\\p{Cc}]+$",
+    "must not strip for providers that accept the pattern"
+  );
+});
+
