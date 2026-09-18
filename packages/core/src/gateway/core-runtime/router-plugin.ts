@@ -13,11 +13,17 @@ import {
   type ClaudeCodeRouteDecision
 } from "@ccr/core/gateway/claude-code-router-plugin";
 import {
+  applyEmptyCompletionGuardResponse,
+  applyEmptyCompletionGuardStream
+} from "@ccr/core/gateway/core-runtime/empty-completion-guard";
+import {
   ccrCodexApplyPatchBridgeHeader,
   ccrCodexBridgeRequestTransformKey,
   ccrCodexBridgeResponseHookKey,
   ccrCodexBridgeStreamHookKey,
   ccrCodexMultiAgentBridgeHeader,
+  ccrEmptyCompletionGuardResponseHookKey,
+  ccrEmptyCompletionGuardStreamHookKey,
   ccrOpenRouterDiscountFinalizeResponseHookKey,
   ccrOpenRouterDiscountFinalizeStreamHookKey,
   ccrOpenRouterDiscountRequestIdHeader,
@@ -446,6 +452,19 @@ export async function createGatewayPlugin(input: GatewayPluginFactoryInput = {})
         finalizeOpenRouterDiscountSelection(responseInput);
         return undefined;
       }
+    }, {
+      // Empty-completion guard. The engine coerces absent content to "" and passes the
+      // upstream status through, so a provider that returns nothing still reaches the
+      // client as HTTP 200 with no content — indistinguishable from a real empty answer.
+      // Reclassify it as 502. See empty-completion-guard.ts for why the test is
+      // content-based rather than token-based.
+      key: ccrEmptyCompletionGuardResponseHookKey,
+      transformResponse: (responseInput: GatewayResponseHookInput) =>
+        applyEmptyCompletionGuardResponse({
+          model: responseInput.model,
+          statusCode: responseInput.statusCode,
+          responsePayload: responseInput.responsePayload
+        })
     }],
     streamHooks: [{
       key: ccrCodexBridgeStreamHookKey,
@@ -457,6 +476,17 @@ export async function createGatewayPlugin(input: GatewayPluginFactoryInput = {})
         finalizeOpenRouterDiscountSelection(streamInput);
         return undefined;
       }
+    }, {
+      // Streaming counterpart of the empty-completion guard. The engine dispatches
+      // responseHooks and streamHooks on separate paths and which one fires is not
+      // statically determinable, so both are covered. A stream cannot be reclassified
+      // after the fact, so this appends a synthetic error event instead.
+      key: ccrEmptyCompletionGuardStreamHookKey,
+      transformResponse: (streamInput: GatewayStreamHookInput) =>
+        applyEmptyCompletionGuardStream({
+          model: streamInput.model,
+          upstreamResponse: streamInput.upstreamResponse
+        })
     }],
     routeResolvers: [{
       key: ccrRouterRouteResolverKey,
