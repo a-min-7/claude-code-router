@@ -40,7 +40,7 @@ async function main() {
       settings: mergeLocalizedSettings(settingsEn, settingsZh),
       env: mergeLocalizedEnv(envEn, envZh)
     };
-    writeJsonIfChanged(outputFile, generated);
+    writeJsonIfChanged(outputFile, generated, previous);
     console.log(`[claude-config] Generated ${generated.settings.length} settings and ${generated.env.length} environment variables from official Claude Code docs.`);
   } catch (error) {
     if (previous?.settings?.length || previous?.env?.length) {
@@ -592,19 +592,44 @@ function isEnvName(value) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
-function writeJsonIfChanged(file, value) {
-  const content = `${JSON.stringify(value, null, 2)}\n`;
-  let previous = "";
-  try {
-    previous = readFileSync(file, "utf8");
-  } catch {
-    previous = "";
+/**
+ * Write the generated catalog, but only when its CONTENT changed.
+ *
+ * `generatedAt` is a wall-clock stamp that lives inside the payload, so the
+ * payload is never byte-equal to the previous one even when nothing else moved:
+ * the comparison below could therefore never succeed, and every build rewrote a
+ * file whose real content was identical. Because the artifact is tracked
+ * (packages/ui imports it statically), that made it permanently dirty after every
+ * build on every host — and two hosts can never converge on a timestamp, so it
+ * showed up as unexplainable cross-host drift. Measured 2026-09-18: the same
+ * build wrote `generatedAt` 09:05:10.857Z on one host and 09:05:26.583Z on the
+ * other, with the rest of the 964 changed lines byte-identical.
+ *
+ * So: compare everything EXCEPT the stamp; if the rest is unchanged, keep the
+ * previous stamp and the existing file. A genuine doc change still rewrites it
+ * with a fresh stamp, which is what the field should mean.
+ */
+function writeJsonIfChanged(file, value, previous) {
+  if (previous && sameContentExceptGeneratedAt(value, previous)) {
+    value.generatedAt = previous.generatedAt;
   }
-  if (previous === content) {
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  let previousContent = "";
+  try {
+    previousContent = readFileSync(file, "utf8");
+  } catch {
+    previousContent = "";
+  }
+  if (previousContent === content) {
     return;
   }
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, content, "utf8");
+}
+
+function sameContentExceptGeneratedAt(a, b) {
+  const strip = ({ generatedAt, ...rest }) => JSON.stringify(rest);
+  return strip(a) === strip(b);
 }
 
 function escapeRegExp(value) {
