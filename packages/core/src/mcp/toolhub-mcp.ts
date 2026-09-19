@@ -224,6 +224,15 @@ process.stdin.on("data", (chunk) => {
 
 process.stdin.resume();
 
+// stdin closed => the parent is gone. Exit rather than linger: an MCP stdio server
+// is expected to shut down when its client closes the pipe, and without this the
+// process survives on its backend HTTP sockets and is reparented to launchd.
+// Observed 2026-09-20 — nine such orphans accumulated in half an hour of CLI runs,
+// ~55 MB RSS each, two of them still holding a superseded build.
+process.stdin.on("end", () => {
+  process.exit(0);
+});
+
 process.on("exit", () => {
   runtime.close();
 });
