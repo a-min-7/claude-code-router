@@ -452,7 +452,21 @@ class ToolHubRuntime {
   private async invokeTool(args: Record<string, unknown>): Promise<unknown> {
     const requestedTool = typeof args.tool === "string" ? args.tool.trim() : "";
     if (!requestedTool) {
-      throw new Error(`${invokeToolName} requires tool.`);
+      // Self-describing.  A bare "requires tool" named the missing field but never
+      // the shape, so a retry carried no new information and the caller guessed
+      // again — six consecutive invokes failed this way on 2026-09-20 while the
+      // caller had already been told, in its system prompt, what the shape was.
+      // State the field, show the object, and list what resolve has actually
+      // loaded, which the session already tracks.
+      const loaded = [...this.session(this.scopeKey(args)).loadedTools];
+      const available = loaded.length
+        ? ` Resolved in this session and callable now: ${loaded.join(", ")}.`
+        : ` Nothing is resolved for this scope yet — call ${resolveToolName} for the task first.`;
+      throw new Error(
+        `${invokeToolName} requires a "tool" argument naming the resolved tool to call, ` +
+          `plus an "args" object holding that tool's own arguments — for example ` +
+          `{"tool": "mcp.<server>.<tool>", "args": {"key": "value"}}.${available}`
+      );
     }
     const scopeKey = this.scopeKey(args);
     this.registry.updateServers(readBackendServers());
