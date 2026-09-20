@@ -11,6 +11,14 @@ import {
   McpServerHttpError,
   McpSseStreamClosedError
 } from "@ccr/core/mcp/toolhub-mcp-session";
+import {
+  buildExecutionPlanJs,
+  buildLocalFallbackWorkflowSketch,
+  buildSequentialExecutionPlanJs,
+  getSchemaRequiredProperties,
+  isBrowserAutomationTool,
+  toIdentifier
+} from "@ccr/core/mcp/toolhub-plan";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -201,10 +209,6 @@ const executionPlanInstructions = [
   "Only callTool calls inside the same Promise.all([...]) expression may be issued as parallel tool calls.",
   "If a later call needs values from an earlier result, wait for that earlier result and fill the arguments after it returns."
 ].join(" ");
-const reservedJavaScriptWords = new Set(
-  "await break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with yield"
-    .split(" ")
-);
 
 type RuntimeLike = {
   callTool(params: unknown): Promise<unknown>;
@@ -2166,14 +2170,6 @@ function serverNamespaces(serverNames: string[]): Map<string, string> {
   return output;
 }
 
-function toIdentifier(value: string): string {
-  const normalized = value.replace(/[^a-zA-Z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
-  if (!normalized) {
-    return "tool";
-  }
-  return /^\d/.test(normalized) ? `_${normalized}` : normalized;
-}
-
 function toSearchCatalogItem(entry: CatalogEntry): SearchCatalogItem {
   return {
     alias: entry.alias,
@@ -2695,69 +2691,6 @@ function expandToolBundleWithCompanionTools(selectedTools: CatalogEntry[], catal
   return output;
 }
 
-function isBrowserAutomationTool(tool: CatalogEntry): boolean {
-  return tool.serverName === "ccr-browser-automation" ||
-    tool.serverId === "ccr-browser-automation" ||
-    tool.serverNamespace === "ccr_browser_automation" ||
-    tool.toolName.startsWith("mcp.ccr_browser_automation.");
-}
-
-function buildLocalFallbackWorkflowSketch(selectedTools: CatalogEntry[]): string | undefined {
-  return selectedTools.length > 0 ? buildSequentialExecutionPlanJs(selectedTools) : undefined;
-}
-
-function isBrowserNavigationTool(tool: CatalogEntry): boolean {
-  return isBrowserAutomationTool(tool) && (
-    tool.toolName.endsWith("browser_session_open") ||
-    tool.toolName.endsWith("browser_navigate") ||
-    tool.remoteToolName === "browser_session_open" ||
-    tool.remoteToolName === "browser_navigate"
-  );
-}
-
-function buildExecutionPlanJs(workflowSketch: string | undefined, selectedTools: CatalogEntry[]): string {
-  const trimmed = typeof workflowSketch === "string" ? workflowSketch.trim() : "";
-  return trimmed || buildSequentialExecutionPlanJs(selectedTools);
-}
-
-function buildSequentialExecutionPlanJs(selectedTools: CatalogEntry[]): string {
-  if (selectedTools.length === 0) {
-    return [
-      "async function runWithToolHub() {",
-      "  // Ask the user for missing task details before invoking tools.",
-      "}"
-    ].join("\n");
-  }
-  const lines = [
-    "async function runWithToolHub() {",
-    "  // Invoke calls in this order unless the plan explicitly uses Promise.all."
-  ];
-  selectedTools.forEach((tool, index) => {
-    lines.push(`  const step${index + 1} = await callTool(${JSON.stringify(tool.toolName)}, ${buildExecutionPlanArgs(tool)});`);
-  });
-  lines.push("}");
-  return lines.join("\n");
-}
-
-function buildExecutionPlanArgs(tool: CatalogEntry): string {
-  if (isBrowserNavigationTool(tool)) {
-    return "{ url, waitUntil: \"interactive\" }";
-  }
-  const required = getSchemaRequiredProperties(tool.inputSchema);
-  if (required.length === 0) {
-    return "{}";
-  }
-  return `{ ${required.map((key) => `${JSON.stringify(key)}: ${toPlanVariableName(key)}`).join(", ")} }`;
-}
-
-function toPlanVariableName(value: string): string {
-  const identifier = toIdentifier(value).replace(/^[A-Z]/, (match) => match.toLowerCase());
-  if (!identifier || reservedJavaScriptWords.has(identifier)) {
-    return "value";
-  }
-  return identifier;
-}
-
 function inferInvocation(tool: ToolDefinition): ToolInvocation {
   const text = `${tool.name} ${tool.title ?? ""} ${tool.description ?? ""}`;
   const tokenList = tokenizeToolText(text);
@@ -2880,12 +2813,6 @@ function isLikelyUserSuppliedArgument(name: string): boolean {
 
 function normalizeSchemaPropertyName(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function getSchemaRequiredProperties(schema: Record<string, unknown> | undefined): string[] {
-  return Array.isArray(schema?.required)
-    ? schema.required.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function cloneServerConfig(config: GatewayMcpServerConfig): GatewayMcpServerConfig {
