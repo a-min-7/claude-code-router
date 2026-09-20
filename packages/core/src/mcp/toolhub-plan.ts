@@ -44,6 +44,13 @@
 
 /** The catalog fields the plan builders actually read. */
 export type PlanToolEntry = {
+  /**
+   * The catalog's generator-facing name (`mcp.deepseek.deepseek_chat_completion`).
+   * Optional because it is only read by the sketch repair's name matching, and a
+   * caller that omits it should lose that match rather than fail to compile —
+   * every real caller passes a `CatalogEntry`, which always carries it.
+   */
+  alias?: string;
   inputSchema?: Record<string, unknown>;
   remoteToolName: string;
   serverId: string;
@@ -197,7 +204,11 @@ type CallToolInvocation = {
  * A call is re-wrapped as `{ "<requiredKey>": <original arguments> }` only when
  * all of these hold:
  *
- *   1. its tool name is one of `selectedTools`;
+ *   1. its tool name resolves to one of `selectedTools` — matched against the
+ *      catalog name, the remote tool name **and** the alias, because the sketch's
+ *      author writes all three forms (`mcp.deepseek.deepseek_chat_completion`,
+ *      `deepseek_chat_completion`, `mcp_deepseek_deepseek_chat_completion`) and a
+ *      name that fails to resolve simply skips the repair;
  *   2. that tool's `inputSchema.required` is exactly one entry;
  *   3. that entry's schema in `inputSchema.properties` is `type: "object"`;
  *   4. its argument is a non-empty object literal;
@@ -208,9 +219,23 @@ type CallToolInvocation = {
  * an object literal, a call nested inside another call's arguments — is left
  * exactly as authored. The repair therefore fails open to the previous
  * behaviour rather than mangling a sketch it could not parse.
+ *
+ * ⚠️ Matching only the catalog `toolName` was the first version, and a live resolve
+ * emitted the BARE name (`callTool("deepseek_chat_completion", …)`) with flattened
+ * arguments — a real case that silently skipped the repair. All three forms are
+ * indexed now.
  */
 export function repairSketchArguments(sketch: string, selectedTools: PlanToolEntry[]): string {
-  const toolByName = new Map(selectedTools.map((tool) => [tool.toolName, tool]));
+  const toolByName = new Map<string, PlanToolEntry>();
+  for (const tool of selectedTools) {
+    // First writer wins, so a tool whose remoteToolName or alias collides with
+    // another tool's catalog name cannot shadow that tool.
+    for (const name of [tool.toolName, tool.remoteToolName, tool.alias]) {
+      if (name && !toolByName.has(name)) {
+        toolByName.set(name, tool);
+      }
+    }
+  }
   if (toolByName.size === 0) {
     return sketch;
   }
