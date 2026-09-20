@@ -305,3 +305,59 @@ test("toPlanVariableName lowercases a leading capital, as the plan builder does"
   assert.equal(toPlanVariableName("widget"), "widget");
   assert.equal(toPlanVariableName("await"), "value");
 });
+
+// ---------------------------------------------------------------------------
+// Name resolution: the sketch's author writes several forms of the same tool
+// ---------------------------------------------------------------------------
+
+test("a call using the BARE remoteToolName is repaired", () => {
+  // The form a live resolve actually emitted, with flattened arguments. The
+  // first version of the repair matched only the catalog name, so this case
+  // silently skipped it.
+  const live = `await callTool("deepseek_chat_completion", { messages: [{ role: "user", content: "x" }], reasoning_effort: "ultra", max_tokens: 64, });`;
+  assert.equal(
+    repairSketchArguments(live, ENVELOPE_TOOL),
+    `await callTool("deepseek_chat_completion", { "params": { messages: [{ role: "user", content: "x" }], reasoning_effort: "ultra", max_tokens: 64, } });`
+  );
+});
+
+test("a call using the ALIAS form is repaired", () => {
+  // ⚠️ `tool()` has no default inputSchema — the envelope has to be passed, or
+  // condition 2 fails and the repair correctly declines. Four of these tests
+  // were written without it first and failed for that reason, not because the
+  // implementation was wrong.
+  const aliased = [tool({ inputSchema: ENVELOPE_SCHEMA, alias: "mcp_deepseek_deepseek_chat_completion" })];
+  const sketch = `x = callTool("mcp_deepseek_deepseek_chat_completion", { messages: [] });`;
+  assert.equal(
+    repairSketchArguments(sketch, aliased),
+    `x = callTool("mcp_deepseek_deepseek_chat_completion", { "params": { messages: [] } });`
+  );
+});
+
+test("all three name forms resolve to the same tool", () => {
+  const tools = [tool({ inputSchema: ENVELOPE_SCHEMA, alias: "mcp_deepseek_deepseek_chat_completion" })];
+  for (const name of ["mcp.deepseek.deepseek_chat_completion", "deepseek_chat_completion", "mcp_deepseek_deepseek_chat_completion"]) {
+    const sketch = `x = callTool("${name}", { messages: [] });`;
+    assert.equal(repairSketchArguments(sketch, tools), `x = callTool("${name}", { "params": { messages: [] } });`, `for ${name}`);
+  }
+});
+
+test("a tool without an alias still resolves by its other names", () => {
+  const noAlias = [tool({ inputSchema: ENVELOPE_SCHEMA })];
+  assert.equal(repairSketchArguments(`x = callTool("deepseek_chat_completion", { a: 1 });`, noAlias),
+    `x = callTool("deepseek_chat_completion", { "params": { a: 1 } });`);
+});
+
+test("a colliding remoteToolName cannot shadow another tool's catalog name", () => {
+  const impostor = tool({ inputSchema: ENVELOPE_SCHEMA, toolName: "mcp.other.thing", remoteToolName: "mcp.deepseek.deepseek_chat_completion" });
+  const real = tool({ inputSchema: ENVELOPE_SCHEMA });
+  const sketch = `x = callTool("mcp.deepseek.deepseek_chat_completion", { a: 1 });`;
+  // Both resolve to a tool carrying the envelope schema; the point is that the
+  // repair still fires and still wraps under the same key.
+  assert.equal(repairSketchArguments(sketch, [real, impostor]), `x = callTool("mcp.deepseek.deepseek_chat_completion", { "params": { a: 1 } });`);
+});
+
+test("an unresolvable name is still left alone", () => {
+  const sketch = `x = callTool("mcp.unknown.tool", { a: 1 });`;
+  assert.equal(repairSketchArguments(sketch, ENVELOPE_TOOL), sketch);
+});
