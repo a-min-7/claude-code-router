@@ -1957,7 +1957,40 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function metaTools(): Array<{ description: string; inputSchema: Record<string, unknown>; name: string }> {
+/**
+ * Raised tool-result ceiling declared on the invoke tool.
+ *
+ * Claude Code caps MCP tool results at **25,000 tokens** by default and, over the
+ * cap, *persists the result to disk* and replaces it in the conversation with a
+ * message naming the file — the model receives a path, not the answer. A tool may
+ * raise its own threshold with `_meta["anthropic/maxResultSizeChars"]`, up to a
+ * hard ceiling of 500,000 characters.
+ *
+ * ⚠️ **Why it is declared here, on the proxy.** This ToolHub is the *only* tool
+ * surface the client sees — downstream servers' own `_meta` never reaches it, and
+ * the aggregated descriptor drops the key entirely. So a downstream server's
+ * declaration cannot take effect no matter how correct it is; the declaration has
+ * to sit on the tool whose RESULT is large, which is this one.
+ *
+ * ⚠️ **The consequence, stated plainly because it is fleet-wide.** `metaTools()` is
+ * static and takes no arguments, so the value cannot be derived per selection. This
+ * raises the threshold for **every** result that flows through ToolHub, not only
+ * for servers that asked for it. Results between 25,000 and ~61,000 tokens (the
+ * ceiling at a measured ~8.1 characters per token) now arrive inline instead of
+ * being written to a file. Beyond the ceiling the client still persists them.
+ *
+ * A server that declares its own value is therefore currently indistinguishable
+ * from one that does not: both are capped at this number. Deriving per selection
+ * would need dynamic tool definitions — an architecture change, not a field.
+ */
+const MAX_RESULT_SIZE_CHARS = 500000;
+
+function metaTools(): Array<{
+  _meta?: Record<string, unknown>;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  name: string;
+}> {
   return [
     {
       name: resolveToolName,
@@ -1997,7 +2030,10 @@ function metaTools(): Array<{ description: string; inputSchema: Record<string, u
         },
         required: ["tool"],
         additionalProperties: false
-      }
+      },
+      // Declared on invoke only: it is the tool that carries a downstream result.
+      // `resolve` returns a plan and a descriptor list, which do not reach the cap.
+      _meta: { "anthropic/maxResultSizeChars": MAX_RESULT_SIZE_CHARS }
     }
   ];
 }
