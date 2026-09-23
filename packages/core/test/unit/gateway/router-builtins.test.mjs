@@ -3454,6 +3454,78 @@ test("custom router rule thinking rewrite wins over the built-in subagent thinki
   assert.equal(result.body.enable_thinking, true);
 });
 
+// ---- oMLX (wangfu) nested thinking kwarg ----
+//
+// oMLX ignores the TOP-LEVEL enable_thinking on both OpenAI surfaces and honours only the nested
+// chat_template_kwargs shape (measured on wangfu oMLX 0.6.4 with temperature=0: top-level →
+// 241 tokens, identical to baseline; nested → 3 tokens / 0 reasoning). The tag therefore writes
+// BOTH. The top-level write must never be removed even though oMLX ignores it: the Z.ai clamp
+// detects a disable intent from that key, and without it a forced-thinking model 400s.
+
+test("oMLX: the subagent thinking tag also writes the nested chat_template_kwargs kwarg", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.chat_template_kwargs.enable_thinking, false, "the nested field is what oMLX reads");
+  assert.equal(result.body.enable_thinking, false, "the top-level field is retained for the Z.ai clamp");
+});
+
+test("oMLX: an enabling tag writes a nested true, not a nested false", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>high</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.chat_template_kwargs.enable_thinking, true);
+  assert.equal(result.body.enable_thinking, true);
+});
+
+// A `set` at a dotted path merges, so a caller that already sent its own chat_template_kwargs
+// (oMLX accepts several keys in that object) keeps them. If this goes red the rewrite has been
+// changed to a whole-object replace, which would silently drop e.g. preserve_thinking.
+test("oMLX: the nested write merges with the caller's own chat_template_kwargs", async () => {
+  const plugin = createRouterPlugin({
+    profileModel: "OpenAI/claude-sonnet",
+    providers: openAiThinkingProviderFixture()
+  });
+  const result = await plugin.routeRequest({
+    body: {
+      chat_template_kwargs: { preserve_thinking: true },
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    },
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url: "/v1/messages"
+  });
+
+  assert.equal(result.body.chat_template_kwargs.preserve_thinking, true, "the caller's sibling survives");
+  assert.equal(result.body.chat_template_kwargs.enable_thinking, false);
+});
+
 // ---- Z.ai forced-thinking clamp — THE LIVE PATH (plugin, not executor.ts) ----
 //
 // This plugin is what the gateway engine loads (bundle key "ccr-router"), so it is the only
@@ -3739,5 +3811,157 @@ test("Z.ai 5.3: the subagent-thinking tag fires on the real client URL", async (
 
   assert.ok(!("enable_thinking" in result.body), "enable_thinking must not reach Z.ai");
   assert.equal(result.body.reasoning_effort, "low");
+});
+
+// ---- Z.ai Anthropic Message Protocol surface (capability added 2026-09-23) ----
+//
+// Z.ai also serves https://api.z.ai/api/anthropic, and with that capability present an Anthropic
+// client is served NATIVELY instead of being converted — so the clamp sees a different wire shape:
+// output_config.effort is the only working lever and reasoning_effort is accepted-and-ignored
+// (measured 2026-09-23: 4965 vs 5282 think chars, overlapping). The hazards are identical, but the
+// highest-volume one is not an edge case: Claude Code's DEFAULT body carries
+// output_config.effort:"medium", which Z.ai rejects with 400 code 1210, and its
+// thinking:{type:"adaptive"} is a shape the OpenAI-surface tests above never exercise.
+
+function zaiAnthropicCapabilityProviderFixture() {
+  return [{
+    api_base_url: "https://api.z.ai/api/paas/v4",
+    capabilities: [
+      { baseUrl: "https://api.z.ai/api/anthropic", source: "detected", type: "anthropic_messages" },
+      { baseUrl: "https://api.z.ai/api/paas/v4", source: "detected", type: "openai_chat_completions" }
+    ],
+    id: "z.ai-global---general-endpoint",
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"],
+    name: "Z.ai (Global) - General Endpoint",
+    type: "openai_chat_completions"
+  }];
+}
+
+function zaiAnthropicRoute({ body, model = "glm-5.3", url = "/v1/messages" }) {
+  return createRouterPlugin({
+    profileModel: `Z.ai (Global) - General Endpoint/${model}`,
+    providers: zaiAnthropicCapabilityProviderFixture()
+  }).routeRequest({
+    body,
+    headers: { "user-agent": "Claude Code" },
+    method: "POST",
+    url
+  });
+}
+
+// The default shape, verbatim. Without the anthropic branch this is HTTP 400 / code 1210 on EVERY
+// Claude Code request, which is why the capability could not ship before the clamp covered it.
+test("Z.ai anthropic: Claude Code's default body is repaired, not 400'd", async () => {
+  const result = await zaiAnthropicRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      output_config: { effort: "medium" },
+      thinking: { type: "adaptive" }
+    }
+  });
+
+  assert.equal(result.body.output_config.effort, "high", "medium is not in Z.ai's vocabulary");
+  assert.ok(!("thinking" in result.body), "no thinking intent is left to reject");
+  assert.ok(!("reasoning_effort" in result.body), "the inert field is not written on this surface");
+});
+
+// <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING> DELETES output_config and writes
+// thinking:{type:"disabled"} — both unusable on a forced-thinking model. The clamp must drop the
+// disable intent AND re-create output_config, or the repaired effort has nowhere to land and Z.ai
+// silently falls back to its own default (max thinking) instead of the lowest legal level.
+test("Z.ai anthropic: tag off becomes the lowest legal effort, with output_config re-created", async () => {
+  const result = await zaiAnthropicRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>"
+    }
+  });
+
+  assert.ok(!("thinking" in result.body), "the disable intent is removed");
+  assert.deepEqual(result.body.output_config, { effort: "low" }, "a legal effort is stated in the only field that works");
+});
+
+test("Z.ai anthropic: a bare disable intent becomes the lowest legal effort", async () => {
+  const result = await zaiAnthropicRoute({
+    body: { messages: [], model: "claude-default", thinking: { type: "disabled" } }
+  });
+
+  assert.ok(!("thinking" in result.body));
+  assert.equal(result.body.output_config.effort, "low");
+});
+
+test("Z.ai anthropic: every legal effort level passes through verbatim", async () => {
+  for (const level of ["low", "high", "max"]) {
+    const result = await zaiAnthropicRoute({
+      body: {
+        messages: [],
+        model: "claude-default",
+        output_config: { effort: level },
+        // A thinking intent makes the clamp FIRE. Without it this test would pass vacuously: a
+        // declined clamp also leaves output_config.effort untouched, so it could not tell
+        // "passed through" from "never ran".
+        thinking: { type: "adaptive" }
+      }
+    });
+    assert.ok(!("thinking" in result.body), "the clamp must have fired");
+    assert.equal(result.body.output_config.effort, level, `${level} must survive the clamp`);
+  }
+});
+
+test("Z.ai anthropic: medium and xhigh are mapped to the nearest legal level", async () => {
+  const cases = [["medium", "high"], ["xhigh", "max"]];
+  for (const [sent, expected] of cases) {
+    const result = await zaiAnthropicRoute({
+      body: { messages: [], model: "claude-default", output_config: { effort: sent } }
+    });
+    assert.equal(result.body.output_config.effort, expected, `${sent} should become ${expected}`);
+  }
+});
+
+test("Z.ai anthropic: an unrecognised effort is dropped, not guessed", async () => {
+  const result = await zaiAnthropicRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "quantum" } }
+  });
+
+  assert.ok(!("effort" in result.body.output_config), "the rejected value is removed");
+  assert.ok(!("reasoning_effort" in result.body));
+});
+
+// The tag's effort levels are on|off|low|medium|high — so `medium` reaches the anthropic branch
+// and would be written straight into output_config.effort. The clamp has to catch it, or a
+// delegate tagged medium 400s on this surface.
+test("Z.ai anthropic: a medium-tagged subagent is mapped to a legal level", async () => {
+  const result = await zaiAnthropicRoute({
+    body: {
+      messages: [],
+      model: "claude-default",
+      system: "<CCR-SUBAGENT-THINKING>medium</CCR-SUBAGENT-THINKING>"
+    }
+  });
+
+  assert.equal(result.body.output_config.effort, "high");
+});
+
+test("Z.ai anthropic: glm-5.2 is left alone — it is not a forced-thinking model", async () => {
+  const result = await zaiAnthropicRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "medium" } },
+    model: "glm-5.2"
+  });
+
+  assert.equal(result.body.output_config.effort, "medium");
+});
+
+// Adding the capability must not disturb the surface that already carries ~833 events/2 days: an
+// OpenAI client still resolves to openai_chat_completions and still gets both effort shapes.
+test("Z.ai: an OpenAI client is unaffected and keeps both effort shapes", async () => {
+  const result = await zaiAnthropicRoute({
+    body: { messages: [], model: "claude-default", output_config: { effort: "medium" } },
+    url: "/v1/chat/completions"
+  });
+
+  assert.equal(result.body.reasoning_effort, "high");
+  assert.equal(result.body.output_config.effort, "high");
 });
 
