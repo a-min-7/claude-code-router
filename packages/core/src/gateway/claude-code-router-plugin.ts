@@ -1503,6 +1503,20 @@ function buildSubagentThinkingRewrites(
   push("request.body.thinking", "delete");
   push("request.body.enable_thinking", "delete");
   push("request.body.enable_thinking", "set", value === "off" ? "false" : "true");
+  // oMLX (wangfu) IGNORES the top-level field on BOTH OpenAI surfaces and honours only the
+  // nested shape. Measured 2026-09-23 against wangfu oMLX 0.6.4, temperature=0: top-level
+  // enable_thinking:false → 241 tokens, identical to baseline, on /v1/chat/completions and on
+  // /v1/responses; nested chat_template_kwargs.enable_thinking:false → 3 tokens / 0 reasoning.
+  // So without this line the tag is inert for every openai-protocol oMLX target.
+  //
+  // ADD, never replace the write above: applyZaiForcedThinkingClamp() below detects a disable
+  // intent from the TOP-LEVEL key, so dropping it would silently stop the clamp repairing a
+  // forced-thinking Z.ai model — which turns the request into HTTP 400 code 1210. oMLX ignores
+  // that top-level field, so writing both costs nothing.
+  //
+  // `set` at a dotted path MERGES (routing/rewrite.ts:242-270 creates intermediates only when
+  // missing), so a caller's own chat_template_kwargs siblings survive.
+  push("request.body.chat_template_kwargs.enable_thinking", "set", value === "off" ? "false" : "true");
   return rewrites;
 }
 
@@ -1588,11 +1602,27 @@ function applyZaiForcedThinkingClamp(input: {
   const protocol = clientProtocol
     ? providerProtocolForClientProtocol(resolved.provider, clientProtocol)
     : undefined;
-  if (protocol !== "openai_chat_completions" && protocol !== "openai_responses") {
+  // anthropic_messages is included because Z.ai serves an Anthropic Message Protocol surface at
+  // https://api.z.ai/api/anthropic (capability added 2026-09-23) and the SAME forced-thinking
+  // model rejects the same payloads there — Z.ai answers {type:"disabled"} with 400 code 1210 on
+  // that path too. It is also the DEFAULT shape a Claude Code request arrives in
+  // (thinking:{type:"adaptive"} + output_config:{effort:"medium"}), and `medium` is not in Z.ai's
+  // low|high|max vocabulary, so declining here 400s every default request rather than an edge case.
+  if (
+    protocol !== "openai_chat_completions" &&
+    protocol !== "openai_responses" &&
+    protocol !== "anthropic_messages"
+  ) {
     return false;
   }
 
   const body = input.body;
+  // Which field carries the effort depends on the surface:
+  //   - anthropic_messages: output_config.effort is the ONLY working lever. reasoning_effort is
+  //     accepted-and-ignored there (measured 2026-09-23: 4965 vs 5282 think chars, overlapping).
+  //   - openai_*: the engine CONVERTS output_config.effort → reasoning_effort downstream, so both
+  //     shapes are re-stated and neither can overwrite the other.
+  const anthropicSurface = protocol === "anthropic_messages";
   const outputConfig = isRecord(body.output_config) ? body.output_config : undefined;
   const hasReasoningEffort = "reasoning_effort" in body;
   const hasOutputEffort = outputConfig !== undefined && "effort" in outputConfig;
@@ -1624,9 +1654,22 @@ function applyZaiForcedThinkingClamp(input: {
     delete outputConfig.effort;
   }
   if (effort !== undefined) {
-    body.reasoning_effort = effort;
-    if (hasOutputEffort && outputConfig !== undefined) {
-      outputConfig.effort = effort;
+    if (anthropicSurface) {
+      // Created when absent — <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING> DELETES
+      // output_config outright (buildSubagentThinkingRewrites above). Without the create branch the
+      // repaired effort would have nowhere to land, and Z.ai would silently fall back to its own
+      // default (max thinking) instead of the "as close to off as this model allows" the tag asked
+      // for — a silent wrong answer rather than a 400.
+      if (outputConfig !== undefined) {
+        outputConfig.effort = effort;
+      } else {
+        body.output_config = { effort };
+      }
+    } else {
+      body.reasoning_effort = effort;
+      if (hasOutputEffort && outputConfig !== undefined) {
+        outputConfig.effort = effort;
+      }
     }
   }
   return true;
