@@ -1039,7 +1039,23 @@ function coreGatewayProviderSelectorName(
   }
 
   if (requestedProviderName && isCoreGatewayRuntimeProviderName(provider, protocol, requestedProviderName)) {
-    return requestedProviderName.trim();
+    // Honour an explicit capability/credential selector verbatim, but do NOT let a bare
+    // runtime-id selector short-circuit past the client-protocol capability preference above.
+    //
+    // Returning the raw runtime id makes the engine take the provider's FIRST capability
+    // slice, which silently selects the wrong surface whenever a provider exposes more than
+    // one and the first is not the one this client needs. The failure is invisible: the first
+    // slice answers 200, so it only surfaces later, as a protocol-shaped error on a
+    // tool-carrying turn.
+    //
+    // Measured on 2026-09-30 against DeepSeek (id `deepseek`, name `DeepSeek`, four
+    // capabilities with openai_chat_completions first): `DeepSeek/deepseek-flash` was served
+    // by openai_chat_completions, while the anthropic_messages capability is what a Claude
+    // Code client needs. A bare model name (`deepseek-flash`) already resolved correctly, so
+    // this only ever diverged when the client named the provider explicitly.
+    if (!isBareProviderRuntimeIdSelector(provider, requestedProviderName)) {
+      return requestedProviderName.trim();
+    }
   }
 
   const credentials = sortProviderCredentialsForConfig(activeProviderCredentials(provider));
@@ -1048,6 +1064,20 @@ function coreGatewayProviderSelectorName(
   }
 
   return capability ? providerCapabilityInternalName(provider, capability.type) : providerRuntimeId(provider);
+}
+
+/**
+ * True when the selector names the provider by its bare runtime id — e.g. `DeepSeek` for a
+ * provider whose id is `deepseek` — rather than by an explicit capability or credential.
+ *
+ * Such a selector carries no surface information, so it must not be honoured verbatim: the
+ * capability-derived name is what tells the engine which surface to use. A provider whose
+ * public name lowercases to its runtime id (DeepSeek, Z.ai's China plan) hits this on every
+ * ordinary `Provider/model` pin, which is why the distinction is load-bearing rather than
+ * pedantic.
+ */
+function isBareProviderRuntimeIdSelector(provider: GatewayProviderConfig, value: string): boolean {
+  return value.trim().toLowerCase() === providerRuntimeId(provider).toLowerCase();
 }
 
 function isCoreGatewayRuntimeProviderName(
@@ -1065,6 +1095,18 @@ function isCoreGatewayRuntimeProviderName(
   }
   const capabilityName = providerCapabilityInternalName(provider, protocol).toLowerCase();
   return normalized === capabilityName || normalized.startsWith(`${capabilityName}::cred:`);
+}
+
+// Test accessor. This module's only other export is the plugin factory, and the surface
+// selection above is worth pinning directly rather than through a full gateway boot —
+// an integration test would exercise the same three lines with far more machinery between
+// the assertion and the behaviour.
+export function coreGatewayProviderSelectorNameForTest(
+  provider: GatewayProviderConfig,
+  clientProtocol: GatewayProviderProtocol,
+  requestedProviderName?: string
+): string | undefined {
+  return coreGatewayProviderSelectorName(provider, clientProtocol, requestedProviderName);
 }
 
 function stripUntrustedCcrRouteHeaders(headers: Record<string, HeaderValue> | undefined): void {
