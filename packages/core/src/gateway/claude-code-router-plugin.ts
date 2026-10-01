@@ -804,7 +804,23 @@ const ccrSubagentModelTagExample = `${ccrSubagentModelOpenTag}Provider/model${cc
 const ccrSubagentModelPlaceholder = "provider/model";
 const ccrSubagentThinkingOpenTag = "<CCR-SUBAGENT-THINKING>";
 const ccrSubagentThinkingCloseTag = "</CCR-SUBAGENT-THINKING>";
-const ccrSubagentThinkingValueList = ["on", "off", "low", "medium", "high"] as const;
+// ⚠️ `max` BELONGS IN THIS LIST — it is one of the three levels Z.ai documents for glm-5.3.
+// Checked against https://docs.z.ai/guides/llm/glm-5.3 on 2026-10-01: "GLM-5.3 always
+// operates with reasoning enabled and supports three reasoning effort levels: low, high, and
+// max", `max` is that model's DEFAULT, and the card RECOMMENDS it for coding. The list below
+// previously omitted it AND carried an undocumented "medium", so the recommended level was
+// unreachable through the tag.
+//
+// What an omitted value does, measured 2026-10-01 rather than assumed: resolveSubagentThinkingEffect
+// strips the tag, emits a `subagent-thinking-invalid` diagnostic naming the expected values,
+// and builds NO rewrite — so the client's own effort survives (Claude Code sends "high").
+// That fallback is indistinguishable from the default, which is why three spawns tagged `max`
+// all went out at `high` and read as "the tag does nothing". It did not: the router said so in
+// a diagnostic nobody read.
+//
+// "medium" is kept for backward compatibility although the vendor does not document it; the
+// Z.ai forced-thinking clamp coerces it to `high`.
+const ccrSubagentThinkingValueList = ["on", "off", "low", "medium", "high", "max"] as const;
 type SubagentThinkingValue = typeof ccrSubagentThinkingValueList[number];
 const ccrSubagentThinkingPlaceholder = ccrSubagentThinkingValueList.join("|");
 const ccrSubagentThinkingValues = new Set<string>(ccrSubagentThinkingValueList);
