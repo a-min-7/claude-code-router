@@ -286,6 +286,77 @@ test("a tool_use stream counts as content", async () => {
   assert.ok(!(await drain(guarded)).includes("event: error"));
 });
 
+// --- streaming path: openai_chat upstreams (measured 2026-10-05) -------------
+// Every content-bearing streaming case above feeds an ANTHROPIC event shape, which is
+// why the hole below went unnoticed: the predicate was Anthropic-only, and so was its
+// coverage. An openai_chat upstream sends chat.completion.chunk deltas and matched none
+// of the markers — 95 of 97 `grace` requests were logged ok=0 with the synthetic error
+// event appended while their bodies carried reasoning and a tool call.
+
+test("REGRESSION: an openai_chat tool-call stream is NOT given an error event", async () => {
+  const guarded = applyEmptyCompletionGuardStream({
+    model: "nemotron-super-120b",
+    upstreamResponse: streamResponse([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"reasoning":"I need to read the file first"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"chatcmpl-tool-8a4637b3bb0705b7","type":"function","index":0,"function":{"name":"Bash"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":109057,"completion_tokens":581}}\n\n',
+      "data: [DONE]\n\n"
+    ])
+  });
+  assert.ok(guarded);
+  const text = await drain(guarded);
+  assert.ok(!text.includes("event: error"), "a tool-call stream must pass through untouched");
+  assert.ok(text.includes("tool_calls"), "the tool call must survive");
+});
+
+test("REGRESSION: an openai_chat reasoning-only stream counts as content", async () => {
+  const guarded = applyEmptyCompletionGuardStream({
+    model: "nemotron-super-120b",
+    upstreamResponse: streamResponse(['data: {"choices":[{"index":0,"delta":{"reasoning":"Okay"}}]}\n\n'])
+  });
+  assert.ok(guarded);
+  assert.ok(!(await drain(guarded)).includes("event: error"));
+});
+
+test("an openai_chat text stream counts as content", async () => {
+  const guarded = applyEmptyCompletionGuardStream({
+    model: "Qwen3.6-35B-A3B-oQ4-mtp",
+    upstreamResponse: streamResponse(['data: {"choices":[{"index":0,"delta":{"content":"Hello"}}]}\n\n'])
+  });
+  assert.ok(guarded);
+  assert.ok(!(await drain(guarded)).includes("event: error"));
+});
+
+test("a content marker split across a chunk boundary is still detected", async () => {
+  const guarded = applyEmptyCompletionGuardStream({
+    model: "nemotron-super-120b",
+    upstreamResponse: streamResponse([
+      'data: {"choices":[{"index":0,"delta":{"tool_ca',
+      'lls":[{"id":"t1","type":"function","index":0,"function":{"name":"Read"}}]}}]}\n\n'
+    ])
+  });
+  assert.ok(guarded);
+  assert.ok(!(await drain(guarded)).includes("event: error"));
+});
+
+test("NEGATIVE CONTROL: a genuinely empty openai_chat stream still gains the error event", async () => {
+  // The guard must not be weakened by recognising the openai_chat shape: an empty
+  // content delta, a finish_reason, a usage block and [DONE] carry no content.
+  const guarded = applyEmptyCompletionGuardStream({
+    model: "nemotron-super-120b",
+    upstreamResponse: streamResponse([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":0}}\n\n',
+      "data: [DONE]\n\n"
+    ])
+  });
+  assert.ok(guarded);
+  assert.ok((await drain(guarded)).includes("event: error"));
+});
+
 test("protocol pseudo-models and body-less responses are not wrapped", () => {
   assert.equal(
     applyEmptyCompletionGuardStream({ model: "keepalive", upstreamResponse: streamResponse([]) }),

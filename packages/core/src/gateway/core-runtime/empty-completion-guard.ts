@@ -183,9 +183,12 @@ export function applyEmptyCompletionGuardResponse(
 // Streaming cannot be reclassified after the fact — the status line is already on the
 // wire. So the guard instead appends a synthetic error event when a stream ends
 // without ever carrying content, which the client surfaces as an API error.
+//
+// ⚠️ This path's predicate was Anthropic-only until 2026-10-05, which made it fire on
+// EVERY openai_chat stream. See openAiStreamContentPattern for the measurement.
 // ---------------------------------------------------------------------------
 
-/** SSE markers that mean the stream actually carried model output. */
+/** SSE markers that mean the stream actually carried model output (Anthropic EVENT NAMES). */
 const streamContentMarkers = [
   "content_block_delta",
   "input_json_delta",
@@ -194,8 +197,40 @@ const streamContentMarkers = [
   "tool_use"
 ] as const;
 
+/**
+ * OpenAI-shaped stream markers.
+ *
+ * The list above is Anthropic *event names*. An `openai_chat` upstream streams one
+ * `chat.completion.chunk` per delta and contains none of them, so every such stream was
+ * judged empty and had a synthetic error event appended — including turns that carried a
+ * tool call and reasoning.
+ *
+ * Measured 2026-10-05, `grace` provider (`provider-grace-3a6785346f::openai_chat_completions`,
+ * model `nemotron-super-120b`): 95 of 97 requests were logged `ok=0` with this guard's
+ * message while their captured bodies carried `{"delta":{"reasoning":"…"}}` and
+ * `{"delta":{"tool_calls":[{"type":"function","index":0,"function":{"name":"Bash"}}]}}`
+ * and ended `finish_reason:"tool_calls"`. The client consumed the tool calls normally —
+ * only the ledger `ok` flag and the trailing `event: error` were wrong. The docstring's
+ * rule that "reasoning counts as content" was implemented for the response path and
+ * never for this one.
+ *
+ * Each alternative requires a value that cannot be the EMPTY form, so the guard is not
+ * weakened: `"tool_calls":[{` cannot match `"tool_calls":null` or `[]`, `"reasoning":"x`
+ * cannot match `"reasoning":""`, and `"content":"x` cannot match the role-announcement
+ * delta's `"content":""`.
+ */
+const openAiStreamContentPattern =
+  /"tool_calls"\s*:\s*\[\s*\{|"reasoning(?:_content)?"\s*:\s*"[^"]|"content"\s*:\s*"[^"]/;
+
+/**
+ * A marker can straddle a chunk boundary — `streamCarriesContent` sees one chunk at a
+ * time — so each check also sees the tail of the preceding chunks. 256 chars covers the
+ * longest marker with room to spare.
+ */
+const streamMarkerTailChars = 256;
+
 function streamCarriesContent(text: string): boolean {
-  return streamContentMarkers.some((marker) => text.includes(marker));
+  return streamContentMarkers.some((marker) => text.includes(marker)) || openAiStreamContentPattern.test(text);
 }
 
 /** Synthetic terminal error event for a stream that produced nothing. */
@@ -235,11 +270,16 @@ export function applyEmptyCompletionGuardStream(
   }
   const decoder = new TextDecoder();
   let sawContent = false;
+  let tail = "";
   const wrapped = upstream.body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
-        if (!sawContent && streamCarriesContent(decoder.decode(chunk, { stream: true }))) {
-          sawContent = true;
+        if (!sawContent) {
+          const text = tail + decoder.decode(chunk, { stream: true });
+          if (streamCarriesContent(text)) {
+            sawContent = true;
+          }
+          tail = text.slice(-streamMarkerTailChars);
         }
         controller.enqueue(chunk);
       },
