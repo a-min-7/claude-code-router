@@ -22,6 +22,7 @@ import {
   HttpMcpSdkAdapter,
   StdioMcpSdkAdapter
 } from "./toolhub-sdk-adapters";
+import { normalizeServerConfig } from "./toolhub-server-config";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -1633,59 +1634,6 @@ function readBackendServers(): GatewayMcpServerConfig[] {
   }
 }
 
-function normalizeServerConfig(value: unknown): GatewayMcpServerConfig | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const rawTransport = typeof value.transport === "string" ? value.transport : typeof value.type === "string" ? value.type : "";
-  const normalizedTransport = rawTransport.toLowerCase().replace(/_/g, "-");
-  const transport = normalizedTransport === "streamable-http" || normalizedTransport === "streamablehttp" || normalizedTransport === "http"
-    ? "streamable-http"
-    : normalizedTransport === "sse"
-      ? "sse"
-      : "stdio";
-  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : "";
-  if (!name) {
-    return undefined;
-  }
-  const base = {
-    label: typeof value.label === "string" && value.label.trim() ? value.label.trim() : undefined,
-    name,
-    protocolEra: typeof value.protocolEra === "string" ? value.protocolEra : undefined,
-    protocolVersion: typeof value.protocolVersion === "string" ? value.protocolVersion : protocolVersion,
-    requestTimeoutMs: normalizeTimeout(value.requestTimeoutMs, defaultRequestTimeoutMs),
-    startupTimeoutMs: normalizeTimeout(value.startupTimeoutMs, defaultRequestTimeoutMs),
-    transport
-  };
-  if (transport !== "stdio") {
-    const url = typeof value.url === "string" && value.url.trim() ? value.url.trim() : "";
-    if (!url) {
-      return undefined;
-    }
-    return {
-      ...base,
-      apiKey: typeof value.apiKey === "string" ? value.apiKey : undefined,
-      apiKeyEnv: typeof value.apiKeyEnv === "string" ? value.apiKeyEnv : undefined,
-      headers: isStringRecord(value.headers) ? value.headers : {},
-      transport,
-      url
-    };
-  }
-  const command = typeof value.command === "string" && value.command.trim() ? value.command.trim() : "";
-  if (!command) {
-    return undefined;
-  }
-  return {
-    ...base,
-    args: Array.isArray(value.args) ? value.args.filter((item): item is string => typeof item === "string") : [],
-    command,
-    cwd: typeof value.cwd === "string" && value.cwd.trim() ? value.cwd.trim() : undefined,
-    env: isStringRecord(value.env) ? value.env : {},
-    stdioMessageMode: value.stdioMessageMode === "newline-json" ? "newline-json" : "content-length",
-    transport
-  };
-}
-
 function normalizeToolList(value: unknown): ToolDefinition[] {
   const tools = isRecord(value) && Array.isArray(value.tools) ? value.tools : [];
   const result: ToolDefinition[] = [];
@@ -2671,17 +2619,8 @@ function normalizeMaxTools(value: unknown): number {
   return Number.isFinite(parsed) ? Math.min(Math.max(Math.floor(parsed), 1), 20) : defaultMaxTools;
 }
 
-function normalizeTimeout(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? Math.min(Math.max(Math.floor(parsed), 100), 600_000) : fallback;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
 }
 
 function formatError(error: unknown): string {
