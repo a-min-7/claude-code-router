@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { resolveProtocolEra } from "@ccr/core/mcp/protocol-era";
 import path from "node:path";
 import {
   archiveLegacyJsonConfigFiles,
@@ -2444,7 +2445,7 @@ function parseMcpServers(value: unknown): GatewayMcpServerConfig[] | undefined {
 
       const transport = parseMcpServerTransport(item.transport ?? item.type);
       const name = readString(item.name) || (transport !== "stdio" ? readString(item.url) : readString(item.command)) || `mcp-${index + 1}`;
-      const protocolVersion = readString(item.protocolVersion) || "2024-11-05";
+      const protocolVersion = resolveProtocolEra(readString(item.protocolVersion));
       const startupTimeoutMs = clampNumber(readNumber(item.startupTimeoutMs) ?? 600000, 100, 600000);
       const requestTimeoutMs = clampNumber(readNumber(item.requestTimeoutMs) ?? 30000, 100, 600000);
 

@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { Readable, Transform } from "node:stream";
 import { CONTEXT_ARCHIVE_DB_FILE } from "@ccr/core/config/constants";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import type {
   ApiKeyConfig,
   AppConfig,
@@ -98,7 +99,7 @@ export type ContextArchiveAskOutput = {
   task: string;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const maxMcpRequestBytes = 2 * 1024 * 1024;
 const defaultToolName = "ccr_history_ask";
 const maxUpstreamErrorCharacters = 4000;

@@ -2,6 +2,7 @@ import packageJson from "../../package.json";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ProxyNetworkExchange } from "@ccr/core/contracts/app";
 import { proxyService } from "@ccr/core/proxy/service";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -40,7 +41,7 @@ type ToolCallResult = {
   isError?: boolean;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const maxMcpRequestBytes = 2 * 1024 * 1024;
 
 const networkCaptureTools: McpTool[] = [
