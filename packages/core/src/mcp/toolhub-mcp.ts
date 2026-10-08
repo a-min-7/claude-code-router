@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +7,7 @@ import OpenAI from "openai";
 import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
 import {
-  isSessionLossError,
-  McpServerHttpError,
-  McpSseStreamClosedError
+  isSessionLossError
 } from "@ccr/core/mcp/toolhub-mcp-session";
 import {
   buildExecutionPlanJs,
@@ -20,6 +17,11 @@ import {
   isBrowserAutomationTool,
   toIdentifier
 } from "@ccr/core/mcp/toolhub-plan";
+import {
+  SseMcpSdkAdapter,
+  HttpMcpSdkAdapter,
+  StdioMcpSdkAdapter
+} from "./toolhub-sdk-adapters";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -118,7 +120,9 @@ type McpClient = {
   listTools(): Promise<ToolDefinition[]>;
 };
 
-type PendingRequest = {
+  /** @deprecated (P3a transport migration) kept for P3b migration */
+// @ts-expect-error kept for P3b migration
+  type PendingRequest = {
   reject: (error: Error) => void;
   resolve: (message: JsonRpcRequest) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -966,14 +970,8 @@ class ToolHubRegistry {
 runtime = new ToolHubRuntime();
 
 class SseMcpClient implements McpClient {
-  private endpointUrl = "";
+  private sdkAdapter: SseMcpSdkAdapter | undefined;
   private initialized = false;
-  private nextId = 1;
-  private openPromise: Promise<void> | undefined;
-  private readonly pending = new Map<string, PendingRequest>();
-  private streamAbort: AbortController | undefined;
-  private streamBuffer = "";
-  private streamGeneration = 0;
   private recovery: Promise<void> | undefined;
 
   constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
@@ -981,36 +979,22 @@ class SseMcpClient implements McpClient {
   async listTools(): Promise<ToolDefinition[]> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      const result = await this.request("tools/list", {});
-      return normalizeToolList(result);
+      return this.sdkAdapter!.listTools();
     });
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      return this.request("tools/call", {
-        name,
-        arguments: args
-      });
+      return this.sdkAdapter!.callTool(name, args);
     });
   }
 
   async close(): Promise<void> {
     this.initialized = false;
-    this.endpointUrl = "";
-    this.streamAbort?.abort();
-    this.streamAbort = undefined;
-    this.rejectAll(new Error(`MCP SSE client closed: ${this.server.name}`));
+    this.sdkAdapter = undefined;
   }
 
-  /**
-   * Run an operation, and on session/stream loss reset the transport, open a
-   * fresh stream + session, and retry the operation exactly once. Concurrent
-   * callers that hit session loss share the single in-flight recovery. Only
-   * typed session-loss errors (see toolhub-mcp-session.ts) trigger recovery —
-   * timeouts and generic network errors surface to the caller unchanged.
-   */
   private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
@@ -1029,207 +1013,26 @@ class SseMcpClient implements McpClient {
   }
 
   private async reinitializeAfterSessionLoss(): Promise<void> {
-    // Abort the dead stream and drop the transport state so ensureStream()
-    // reopens a fresh GET (and ensureInitialized mints a fresh session). The
-    // old reader loop is generation-guarded and cannot clobber the new stream.
-    this.streamAbort?.abort();
-    this.streamAbort = undefined;
-    this.streamBuffer = "";
-    this.endpointUrl = "";
     this.initialized = false;
+    this.sdkAdapter = undefined;
     await this.ensureInitialized();
-  }
-
-  /**
-   * Terminal handler for the reader loop of the CURRENT stream (a stale reader
-   * from a superseded stream is generation-mismatched and returns immediately).
-   * Resets transport state so the next use reopens a fresh stream/session, and
-   * rejects anything in flight.
-   */
-  private onStreamEnded(generation: number, error: Error): void {
-    if (generation !== this.streamGeneration) {
-      return;
-    }
-    this.streamAbort = undefined;
-    this.streamBuffer = "";
-    this.initialized = false;
-    this.endpointUrl = "";
-    this.rejectAll(error);
   }
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
     }
-    await this.ensureStream();
-    await this.request("initialize", {
-      capabilities: {},
-      clientInfo: { name: toolHubServerName, version: "1.0.0" },
-      protocolVersion: this.server.protocolVersion || protocolVersion
-    }, this.server.startupTimeoutMs);
-    await this.notification("notifications/initialized", {}).catch(() => undefined);
+    if (!this.sdkAdapter) {
+      this.sdkAdapter = new SseMcpSdkAdapter(this.server, normalizeToolList);
+    }
+    await this.sdkAdapter.listTools(); // triggers lazy init
     this.initialized = true;
-  }
-
-  private async ensureStream(): Promise<void> {
-    if (this.endpointUrl) {
-      return;
-    }
-    if (!this.openPromise) {
-      this.openPromise = this.openStream().finally(() => {
-        this.openPromise = undefined;
-      });
-    }
-    await this.openPromise;
-  }
-
-  private async openStream(): Promise<void> {
-    const controller = new AbortController();
-    const generation = ++this.streamGeneration;
-    this.streamAbort = controller;
-    const response = await fetch(this.server.url, {
-      headers: this.headers(false),
-      method: "GET",
-      signal: controller.signal
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`MCP SSE stream failed (${this.server.name}): ${response.status}`);
-    }
-
-    let resolveEndpoint: () => void = () => {};
-    let rejectEndpoint: (error: Error) => void = () => {};
-    const endpointReady = new Promise<void>((resolve, reject) => {
-      resolveEndpoint = resolve;
-      rejectEndpoint = reject;
-    });
-    const timeout = setTimeout(() => {
-      rejectEndpoint(new Error(`MCP SSE endpoint timed out (${this.server.name}).`));
-      controller.abort();
-    }, this.server.startupTimeoutMs ?? defaultRequestTimeoutMs);
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    void (async () => {
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          this.streamBuffer += decoder.decode(value, { stream: true });
-          this.streamBuffer = consumeSseEvents(this.streamBuffer, (event) => {
-            if (event.event === "endpoint") {
-              this.endpointUrl = new URL(event.data.trim(), this.server.url).toString();
-              clearTimeout(timeout);
-              resolveEndpoint();
-              return;
-            }
-            this.routeSseMessage(event.data);
-          });
-        }
-        this.onStreamEnded(generation, new McpSseStreamClosedError(`MCP SSE stream closed (${this.server.name}).`));
-      } catch (error) {
-        clearTimeout(timeout);
-        if (generation === this.streamGeneration) {
-          rejectEndpoint(toError(error));
-        }
-        this.onStreamEnded(generation, toError(error));
-      }
-    })();
-
-    await endpointReady;
-  }
-
-  private request(method: string, params: Record<string, unknown>, timeoutMs = this.server.requestTimeoutMs): Promise<unknown> {
-    return this.ensureStream().then(() => {
-      const id = this.nextId++;
-      const message = {
-        id,
-        jsonrpc: "2.0",
-        method,
-        params
-      };
-      const pending = new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          this.pending.delete(String(id));
-          reject(new Error(`MCP SSE request timed out (${this.server.name}): ${method}`));
-        }, timeoutMs ?? defaultRequestTimeoutMs);
-        this.pending.set(String(id), {
-          reject,
-          resolve: (response) => {
-            if (isRecord(response.error)) {
-              reject(new Error(String(response.error.message ?? "MCP request failed.")));
-              return;
-            }
-            resolve(response.result);
-          },
-          timer
-        });
-      });
-      return this.post(message).then(() => pending);
-    });
-  }
-
-  private async notification(method: string, params: Record<string, unknown>): Promise<void> {
-    await this.ensureStream();
-    await this.post({ jsonrpc: "2.0", method, params });
-  }
-
-  private async post(message: Record<string, unknown>): Promise<void> {
-    const response = await fetch(this.endpointUrl, {
-      body: JSON.stringify(message),
-      headers: this.headers(true),
-      method: "POST"
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new McpServerHttpError(
-        `MCP SSE post failed (${this.server.name}): ${response.status} ${text.slice(0, 300)}`,
-        response.status,
-        text
-      );
-    }
-  }
-
-  private headers(json: boolean): Headers {
-    const headers = new Headers({
-      ...(json ? { "content-type": "application/json" } : {}),
-      ...(this.server.headers ?? {})
-    });
-    const apiKey = this.server.apiKey || (this.server.apiKeyEnv ? process.env[this.server.apiKeyEnv] : "");
-    if (apiKey && !headers.has("authorization")) {
-      headers.set("authorization", `Bearer ${apiKey}`);
-    }
-    return headers;
-  }
-
-  private routeSseMessage(text: string): void {
-    let message: JsonRpcRequest;
-    try {
-      message = JSON.parse(text) as JsonRpcRequest;
-    } catch {
-      return;
-    }
-    const key = message.id === undefined || message.id === null ? "" : String(message.id);
-    const pending = key ? this.pending.get(key) : undefined;
-    if (!pending) {
-      return;
-    }
-    this.pending.delete(key);
-    clearTimeout(pending.timer);
-    pending.resolve(message);
-  }
-
-  private rejectAll(error: Error): void {
-    for (const item of this.pending.values()) {
-      clearTimeout(item.timer);
-      item.reject(error);
-    }
-    this.pending.clear();
   }
 }
 
 class HttpMcpClient implements McpClient {
+  private sdkAdapter: HttpMcpSdkAdapter | undefined;
   private initialized = false;
-  private sessionId = "";
   private recovery: Promise<void> | undefined;
 
   constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
@@ -1237,24 +1040,20 @@ class HttpMcpClient implements McpClient {
   async listTools(): Promise<ToolDefinition[]> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      const result = await this.request("tools/list", {});
-      return normalizeToolList(result);
+      return this.sdkAdapter!.listTools();
     });
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      return this.request("tools/call", {
-        name,
-        arguments: args
-      });
+      return this.sdkAdapter!.callTool(name, args);
     });
   }
 
   async close(): Promise<void> {
     this.initialized = false;
-    this.sessionId = "";
+    this.sdkAdapter = undefined;
   }
 
   /**
@@ -1283,7 +1082,7 @@ class HttpMcpClient implements McpClient {
 
   private async reinitializeAfterSessionLoss(): Promise<void> {
     this.initialized = false;
-    this.sessionId = "";
+    this.sdkAdapter = undefined;
     await this.ensureInitialized();
   }
 
@@ -1291,264 +1090,44 @@ class HttpMcpClient implements McpClient {
     if (this.initialized) {
       return;
     }
-    await this.request("initialize", {
-      capabilities: {},
-      clientInfo: { name: toolHubServerName, version: "1.0.0" },
-      protocolVersion: this.server.protocolVersion || protocolVersion
-    }, this.server.startupTimeoutMs);
-    await this.notification("notifications/initialized", {}).catch(() => undefined);
+    if (!this.sdkAdapter) {
+      this.sdkAdapter = new HttpMcpSdkAdapter(this.server, normalizeToolList);
+    }
+    await this.sdkAdapter.listTools(); // triggers lazy init
     this.initialized = true;
-  }
-
-  private async notification(method: string, params: Record<string, unknown>): Promise<void> {
-    await this.frame({ jsonrpc: "2.0", method, params }, this.server.requestTimeoutMs, true);
-  }
-
-  private async request(method: string, params: Record<string, unknown>, timeoutMs = this.server.requestTimeoutMs): Promise<unknown> {
-    const response = await this.frame({
-      id: randomUUID(),
-      jsonrpc: "2.0",
-      method,
-      params
-    }, timeoutMs, false);
-    if (!isRecord(response)) {
-      throw new Error(`Invalid MCP response from ${this.server.name}.`);
-    }
-    if (isRecord(response.error)) {
-      throw new Error(`MCP request failed (${this.server.name}): ${String(response.error.message ?? "Unknown error")}`);
-    }
-    return response.result;
-  }
-
-  private async frame(request: Record<string, unknown>, timeoutMs = defaultRequestTimeoutMs, notification: boolean): Promise<unknown> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const headers = new Headers({
-        accept: "application/json, text/event-stream",
-        "content-type": "application/json",
-        ...(this.server.headers ?? {})
-      });
-      const apiKey = this.server.apiKey || (this.server.apiKeyEnv ? process.env[this.server.apiKeyEnv] : "");
-      if (apiKey && !headers.has("authorization")) {
-        headers.set("authorization", `Bearer ${apiKey}`);
-      }
-      if (this.sessionId) {
-        headers.set("mcp-session-id", this.sessionId);
-      }
-      const response = await fetch(this.server.url, {
-        body: JSON.stringify(request),
-        headers,
-        method: "POST",
-        signal: controller.signal
-      });
-      this.sessionId = response.headers.get("mcp-session-id") || response.headers.get("x-mcp-session-id") || this.sessionId;
-      if (notification && response.status === 204) {
-        return undefined;
-      }
-      const text = await response.text();
-      if (!response.ok) {
-        throw new McpServerHttpError(
-          `MCP HTTP request failed (${this.server.name}): ${response.status} ${text.slice(0, 300)}`,
-          response.status,
-          text
-        );
-      }
-      if (!text.trim()) {
-        return undefined;
-      }
-      return parseHttpJsonRpcResponse(text);
-    } finally {
-      clearTimeout(timer);
-    }
   }
 }
 
 class StdioMcpClient implements McpClient {
-  private child: ChildProcessWithoutNullStreams | undefined;
+  private sdkAdapter: StdioMcpSdkAdapter | undefined;
   private initialized = false;
-  private nextId = 1;
-  private readonly pending = new Map<string, PendingRequest>();
-  private stdoutBuffer = Buffer.alloc(0);
 
   constructor(private readonly server: GatewayMcpStdioServerConfig) {}
 
   async listTools(): Promise<ToolDefinition[]> {
     await this.ensureInitialized();
-    const result = await this.request("tools/list", {}, this.server.requestTimeoutMs);
-    return normalizeToolList(result);
+    return this.sdkAdapter!.listTools();
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     await this.ensureInitialized();
-    return this.request("tools/call", {
-      name,
-      arguments: args
-    }, this.server.requestTimeoutMs);
+    return this.sdkAdapter!.callTool(name, args);
   }
 
   async close(): Promise<void> {
     this.initialized = false;
-    for (const item of this.pending.values()) {
-      clearTimeout(item.timer);
-      item.reject(new Error(`MCP stdio client closed: ${this.server.name}`));
-    }
-    this.pending.clear();
-    if (this.child && !this.child.killed) {
-      this.child.kill();
-    }
-    this.child = undefined;
+    this.sdkAdapter = undefined;
   }
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
     }
-    this.ensureChild();
-    await this.request("initialize", {
-      capabilities: {},
-      clientInfo: { name: toolHubServerName, version: "1.0.0" },
-      protocolVersion: this.server.protocolVersion || protocolVersion
-    }, this.server.startupTimeoutMs);
-    this.notify("notifications/initialized", {});
+    if (!this.sdkAdapter) {
+      this.sdkAdapter = new StdioMcpSdkAdapter(this.server, normalizeToolList);
+    }
+    await this.sdkAdapter.listTools(); // triggers lazy init
     this.initialized = true;
-  }
-
-  private ensureChild(): ChildProcessWithoutNullStreams {
-    if (this.child) {
-      return this.child;
-    }
-    const child = spawn(this.server.command, this.server.args ?? [], {
-      cwd: this.server.cwd || undefined,
-      env: {
-        ...process.env,
-        ...(this.server.env ?? {})
-      },
-      stdio: ["pipe", "pipe", "pipe"]
-    }) as ChildProcessWithoutNullStreams;
-    child.stdout.on("data", (chunk: Buffer) => this.readStdout(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8").trim();
-      if (text) {
-        console.error(`[ToolHub backend ${this.server.name}] ${text}`);
-      }
-    });
-    child.on("error", (error) => this.rejectAll(error));
-    child.on("exit", (code, signal) => {
-      this.initialized = false;
-      this.child = undefined;
-      this.rejectAll(new Error(`MCP server exited (${this.server.name}): ${signal ?? code ?? "unknown"}`));
-    });
-    this.child = child;
-    return child;
-  }
-
-  private request(method: string, params: Record<string, unknown>, timeoutMs = defaultRequestTimeoutMs): Promise<unknown> {
-    const id = this.nextId++;
-    const message = {
-      id,
-      jsonrpc: "2.0",
-      method,
-      params
-    };
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(String(id));
-        reject(new Error(`MCP stdio request timed out (${this.server.name}): ${method}`));
-      }, timeoutMs);
-      this.pending.set(String(id), {
-        reject,
-        resolve: (response) => {
-          if (isRecord(response.error)) {
-            reject(new Error(String(response.error.message ?? "MCP request failed.")));
-            return;
-          }
-          resolve(response.result);
-        },
-        timer
-      });
-      this.write(message);
-    });
-  }
-
-  private notify(method: string, params: Record<string, unknown>): void {
-    this.write({ jsonrpc: "2.0", method, params });
-  }
-
-  private write(message: Record<string, unknown>): void {
-    const child = this.ensureChild();
-    const text = JSON.stringify(message);
-    if (this.server.stdioMessageMode === "newline-json") {
-      child.stdin.write(`${text}\n`);
-      return;
-    }
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(text, "utf8")}\r\n\r\n${text}`);
-  }
-
-  private readStdout(chunk: Buffer): void {
-    this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
-    if (this.server.stdioMessageMode === "newline-json") {
-      this.drainNewlineJsonStdout();
-    } else {
-      this.drainContentLengthStdout();
-    }
-  }
-
-  private drainContentLengthStdout(): void {
-    while (true) {
-      const headerEnd = this.stdoutBuffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) return;
-      const headerText = this.stdoutBuffer.subarray(0, headerEnd).toString("utf8");
-      const lengthMatch = headerText.match(/content-length:\s*(\d+)/i);
-      if (!lengthMatch) {
-        this.stdoutBuffer = this.stdoutBuffer.subarray(headerEnd + 4);
-        continue;
-      }
-      const contentLength = Number(lengthMatch[1]);
-      const messageStart = headerEnd + 4;
-      const messageEnd = messageStart + contentLength;
-      if (this.stdoutBuffer.length < messageEnd) return;
-      const text = this.stdoutBuffer.subarray(messageStart, messageEnd).toString("utf8");
-      this.stdoutBuffer = this.stdoutBuffer.subarray(messageEnd);
-      this.routeMessage(text);
-    }
-  }
-
-  private drainNewlineJsonStdout(): void {
-    while (true) {
-      const newline = this.stdoutBuffer.indexOf("\n");
-      if (newline < 0) return;
-      const text = this.stdoutBuffer.subarray(0, newline).toString("utf8").trim();
-      this.stdoutBuffer = this.stdoutBuffer.subarray(newline + 1);
-      if (text) {
-        this.routeMessage(text);
-      }
-    }
-  }
-
-  private routeMessage(text: string): void {
-    let message: JsonRpcRequest;
-    try {
-      message = JSON.parse(text) as JsonRpcRequest;
-    } catch {
-      return;
-    }
-    const key = message.id === undefined || message.id === null ? "" : String(message.id);
-    const pending = key ? this.pending.get(key) : undefined;
-    if (!pending) {
-      return;
-    }
-    this.pending.delete(key);
-    clearTimeout(pending.timer);
-    pending.resolve(message);
-  }
-
-  private rejectAll(error: Error): void {
-    for (const item of this.pending.values()) {
-      clearTimeout(item.timer);
-      item.reject(error);
-    }
-    this.pending.clear();
   }
 }
 
@@ -2133,6 +1712,7 @@ function normalizeOptionalSchema(value: unknown): Record<string, unknown> | unde
   return isRecord(value) ? value : undefined;
 }
 
+// @ts-expect-error kept for P3b migration
 function parseHttpJsonRpcResponse(text: string): unknown {
   if (/^event:/m.test(text) || /^data:/m.test(text)) {
     const events = text.split(/\n\n+/);
@@ -2153,6 +1733,7 @@ function parseHttpJsonRpcResponse(text: string): unknown {
   return JSON.parse(text) as unknown;
 }
 
+// @ts-expect-error kept for P3b migration
 function consumeSseEvents(buffer: string, handle: (event: { data: string; event: string }) => void): string {
   let offset = 0;
   for (;;) {
@@ -3106,6 +2687,7 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// @ts-expect-error kept for P3b migration
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
