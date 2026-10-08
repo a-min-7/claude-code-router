@@ -20,7 +20,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { MODERN_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
-import { resolveProtocolEra } from "@ccr/core/mcp/protocol-era";
+import { resolveProtocolEra, toolHubClientCapabilities } from "@ccr/core/mcp/protocol-era";
 import type { McpProtocolEra } from "@ccr/core/mcp/protocol-era";
 import { ProtocolEraCache } from "@ccr/core/mcp/protocol-probe";
 import { isSessionLossError } from "@ccr/core/mcp/toolhub-mcp-session";
@@ -162,7 +162,7 @@ class SseMcpSdkAdapter implements McpClient {
       this.sdkClient = new SdkClient(
         { name: TOOLHUB_NAME, version: "1.0.0" },
         {
-          capabilities: {}
+          capabilities: toolHubClientCapabilities()
         }
       );
     }
@@ -316,7 +316,7 @@ class HttpMcpSdkAdapter implements McpClient {
       this.sdkClient = new SdkClient(
         { name: TOOLHUB_NAME, version: "1.0.0" },
         {
-          capabilities: {}
+          capabilities: toolHubClientCapabilities()
         }
       );
     }
@@ -434,7 +434,7 @@ class StdioMcpSdkAdapter implements McpClient {
       this.sdkClient = new SdkClient(
         { name: TOOLHUB_NAME, version: "1.0.0" },
         {
-          capabilities: {}
+          capabilities: toolHubClientCapabilities()
         }
       );
     }

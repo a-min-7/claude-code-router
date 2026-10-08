@@ -31,6 +31,40 @@ export const LEGACY_PROTOCOL_VERSION = "2024-11-05";
 export const MODERN_PROTOCOL_VERSION = "2026-07-28";
 
 /**
+ * The MCP **Tasks** extension identifier (SEP-2663) — `io.modelcontextprotocol/tasks`.
+ *
+ * ⚠️ **Era trap, measured 2026-10-09.** In the `2026-07-28` era Tasks is a *named extension*,
+ * declared at `capabilities.extensions[<this id>]`. It is **not** the `capabilities.tasks` key:
+ * that is the deprecated `2025-11-25` *core* vocabulary, and it is what
+ * `@modelcontextprotocol/client`'s `ClientTasksCapabilitySchema` still models (its own doc
+ * comment reads *"@deprecated 2025-11-25 wire vocabulary with no SDK runtime"*). A server checks
+ * the **extension map** — rmcp's `ClientCapabilities::supports_tasks()` is
+ * `extensions.contains_key(TASKS_EXTENSION_ID)` — so declaring the deprecated key would be
+ * silently ignored, and the server would refuse to return a task handle.
+ *
+ * ⚠️ **Declaring this is a promise.** rmcp enforces SEP-2663 in the other direction too: a server
+ * MUST NOT return `CreateTaskResult` unless the client declared this extension. So declaring it
+ * *permits* every backend server to answer `tools/call` with a task handle instead of a result —
+ * and the resolver has **no Tasks runtime** and no `tasks/get` poll loop. Today that is inert,
+ * because no server in this fleet implements Tasks. It stops being inert the moment one does:
+ * the crate must not begin returning task handles until the poll exists here.
+ */
+export const TASKS_EXTENSION_ID = "io.modelcontextprotocol/tasks";
+
+/**
+ * The client capabilities the toolhub resolver declares to a backend MCP server.
+ *
+ * A single builder rather than three inline literals, so the declaration cannot drift between the
+ * SSE, Streamable-HTTP and stdio adapters — and so its shape is unit-testable without reaching
+ * into a private `SdkClient`.
+ */
+export function toolHubClientCapabilities(): {
+  extensions: Record<string, Record<string, never>>;
+} {
+  return { extensions: { [TASKS_EXTENSION_ID]: {} } };
+}
+
+/**
  * Resolve an incoming config value to the internal protocol-era vocabulary.
  *
  * Normalisation rules:
