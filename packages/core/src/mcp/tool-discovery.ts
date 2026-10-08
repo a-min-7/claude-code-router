@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fetchWithSystemProxy } from "@ccr/core/proxy/system-proxy-fetch";
+import { resolveProtocolEra, resolveWireProtocolVersion } from "@ccr/core/mcp/protocol-era";
 import type {
   GatewayMcpRemoteServerConfig,
   GatewayMcpServerConfig,
@@ -81,7 +82,7 @@ async function listStdioMcpServerTools(server: GatewayMcpStdioServerConfig): Pro
       await request("initialize", {
         capabilities: {},
         clientInfo: mcpClientInfo,
-        protocolVersion: server.protocolVersion || "2024-11-05"
+        protocolVersion: resolveProtocolEra(server.protocolVersion)
       });
       notify("notifications/initialized", {});
       const response = await request("tools/list", {});
@@ -166,7 +167,7 @@ async function listStreamableHttpMcpServerTools(server: GatewayMcpRemoteServerCo
     params: {
       capabilities: {},
       clientInfo: mcpClientInfo,
-      protocolVersion: server.protocolVersion || "2024-11-05"
+      protocolVersion: resolveProtocolEra(server.protocolVersion)
     }
   });
   await send({
@@ -230,7 +231,7 @@ async function listLegacySseMcpServerTools(
     await request(messageUrl, "initialize", {
       capabilities: {},
       clientInfo: mcpClientInfo,
-      protocolVersion: server.protocolVersion || "2024-11-05"
+      protocolVersion: resolveProtocolEra(server.protocolVersion)
     });
     await postJsonRpc(server, messageUrl, {
       jsonrpc: "2.0",
@@ -480,9 +481,10 @@ function mcpHttpHeaders(server: GatewayMcpRemoteServerConfig, sessionId = "", in
   if (includeBodyHeaders) {
     headers["Content-Type"] = "application/json";
   }
-  if (server.protocolVersion) {
-    headers["MCP-Protocol-Version"] = server.protocolVersion;
-  }
+  // Convert the normalised era to its wire-level header value.
+  // `auto` and `"2026-07-28"` are not yet wired (P3); stored value
+  // remains `"legacy"` here because config defaults to that era.
+  headers["MCP-Protocol-Version"] = resolveWireProtocolVersion(server.protocolVersion);
   if (sessionId) {
     headers["Mcp-Session-Id"] = sessionId;
   }

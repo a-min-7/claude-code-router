@@ -1,3 +1,5 @@
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
+
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -36,7 +38,7 @@ type ToolCallResult = {
   isError?: boolean;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const tools = readFallbackTools();
 const toolNames = new Set(tools.map((tool) => tool.name));
 

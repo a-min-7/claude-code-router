@@ -1,6 +1,7 @@
 import { join as pathJoin } from "node:path";
 import { CONFIGDIR } from "@ccr/core/config/constants";
 import type { AppConfig, GatewayMcpServerConfig } from "@ccr/core/contracts/app";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 
 export const TOOL_HUB_MCP_SERVER_NAME = "ccr-toolhub";
 export const TOOL_HUB_MCP_RUNTIME_FILE_NAME = "toolhub-mcp.js";
@@ -61,7 +62,7 @@ export function toolHubBuiltInBackendServers(
       apiKey: options.apiKey || firstConfiguredApiKey(config),
       headers: {},
       name: BROWSER_AUTOMATION_MCP_SERVER_NAME,
-      protocolVersion: "2024-11-05",
+      protocolVersion: LEGACY_PROTOCOL_VERSION,
       requestTimeoutMs: BROWSER_AUTOMATION_HANDOFF_TIMEOUT_MS,
       startupTimeoutMs: 60000,
       transport: "streamable-http",

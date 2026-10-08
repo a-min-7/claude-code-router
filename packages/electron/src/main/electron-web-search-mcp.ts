@@ -8,6 +8,7 @@ import type {
   BrowserWebSearchMcpRegistration,
   BrowserWebSearchProtocolRecord
 } from "@ccr/core/gateway/service";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -100,7 +101,7 @@ type BrowserSearchQueueEntry = {
 };
 
 const ownerId = "ccr-browser-web-search-mcp";
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const maxMcpRequestBytes = 2 * 1024 * 1024;
 const defaultResultCount = 5;
 const defaultTimeoutMs = 30_000;

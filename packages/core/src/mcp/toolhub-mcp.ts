@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
 import {
   isSessionLossError,
@@ -194,7 +195,7 @@ type ResolveOutput = {
   workflowSketch?: string;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const toolHubServerName = "ccr-toolhub";
 const resolveToolName = "tool_hub.resolve";
 const invokeToolName = "tool_hub.invoke";

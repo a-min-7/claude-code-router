@@ -10,6 +10,7 @@ import type {
 } from "@ccr/core/contracts/app";
 import type { BrowserAutomationMcpIntegration } from "@ccr/core/gateway/service";
 import { BROWSER_AUTOMATION_MCP_PATH } from "@ccr/core/mcp/toolhub-config";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import { builtInBrowserService, type BrowserAutomationEvent } from "./built-in-browser";
 import { chromeLoginImportService } from "./chrome-login-import";
 
@@ -140,7 +141,7 @@ type NavigationReadinessContext = {
   previousUrl?: string;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const automationEventReplayMs = 15_000;
 const defaultAxSnapshotLimit = 60;
 const defaultSnapshotMaxElements = 80;

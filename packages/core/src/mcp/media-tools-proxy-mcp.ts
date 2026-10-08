@@ -5,9 +5,11 @@ type JsonRpcRequest = { id?: JsonRpcId; jsonrpc?: string; method?: string; param
 type JsonRpcResponse =
   | { id: JsonRpcId; jsonrpc: "2.0"; result: JsonValue }
   | { error: { code: number; message: string }; id: JsonRpcId; jsonrpc: "2.0" };
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
+
 type McpTool = { description: string; inputSchema: Record<string, unknown>; name: string };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const targetUrl = env("CCR_MEDIA_MCP_URL");
 const targetApiKey = env("CCR_MEDIA_MCP_API_KEY");
 const requestTimeoutMs = clampInteger(Number(env("CCR_MEDIA_MCP_REQUEST_TIMEOUT_MS")), 1_000, 3_600_000, 630_000);

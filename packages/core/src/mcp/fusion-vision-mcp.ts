@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
+
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -58,7 +60,7 @@ type VisionAttemptFailure = {
   statusCode?: number;
 };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 const defaultVisionBaseUrl = "https://api.openai.com/v1";
 const defaultVisionModel = "gpt-4o-mini";
 const defaultTimeoutMs = 30000;

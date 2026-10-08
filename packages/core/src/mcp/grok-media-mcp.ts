@@ -14,6 +14,7 @@ import {
   MEDIA_ARTIFACT_PATH_PREFIX,
   MEDIA_TOOLS_MCP_PATH
 } from "@ccr/core/mcp/grok-media-config";
+import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 
 export { LEGACY_GROK_MEDIA_ARTIFACT_PATH_PREFIX, MEDIA_ARTIFACT_PATH_PREFIX } from "@ccr/core/mcp/grok-media-config";
 
@@ -24,7 +25,7 @@ type JsonRpcResponse =
   | { id: null | number | string; jsonrpc: "2.0"; result: JsonValue }
   | { error: { code: number; message: string }; id: null | number | string; jsonrpc: "2.0" };
 
-const protocolVersion = "2024-11-05";
+const protocolVersion = LEGACY_PROTOCOL_VERSION;
 
 export async function handleMediaToolsMcpRequest(
   request: IncomingMessage,
