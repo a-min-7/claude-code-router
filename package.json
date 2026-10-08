@@ -76,6 +76,8 @@
     "rebuild:sqlite3": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/core": "2.3.1",
     "@the-next-ai/ai-gateway": "^1.0.21",
     "@the-next-ai/bot-gateway-sdk": "^0.1.0",
     "better-sqlite3": "^12.11.1",
