@@ -21,38 +21,43 @@
 // through here into an adapter to keep that from recurring.
 // ──────────────────────────────────────────────────────────────────────────────
 
-import { LEGACY_PROTOCOL_VERSION, resolveProtocolEra } from "@ccr/core/mcp/protocol-era";
+import { LEGACY_PROTOCOL_VERSION, resolveProtocolEra, type McpProtocolEra } from "@ccr/core/mcp/protocol-era";
+import type {
+  GatewayMcpRemoteServerConfig as ContractRemoteServerConfig,
+  GatewayMcpServerConfig as ContractServerConfig,
+  GatewayMcpStdioServerConfig as ContractStdioServerConfig
+} from "@ccr/core/contracts/app";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-type GatewayMcpServerBaseConfig = {
+/** The two fields the resolver's internals add on top of the config contract. */
+type ResolverInternalFields = {
+  /** Presentational only; the config contract does not model it. */
   label?: string;
-  name: string;
-  protocolEra?: string;
-  protocolVersion?: string;
-  requestTimeoutMs?: number;
-  startupTimeoutMs?: number;
-  transport: "stdio" | "streamable-http" | "sse";
+  /** The resolver's internal era vocabulary, resolved from `protocolVersion`. */
+  protocolEra?: McpProtocolEra;
 };
 
-type GatewayMcpStdioServerConfig = GatewayMcpServerBaseConfig & {
-  args?: string[];
-  command: string;
-  cwd?: string;
-  env?: Record<string, string>;
-  stdioMessageMode?: "content-length" | "newline-json";
-  transport: "stdio";
-};
-
-type GatewayMcpRemoteServerConfig = GatewayMcpServerBaseConfig & {
-  apiKey?: string;
-  apiKeyEnv?: string;
-  headers?: Record<string, string>;
-  transport: "streamable-http" | "sse";
-  url: string;
-};
-
-export type NormalizedServerConfig = GatewayMcpStdioServerConfig | GatewayMcpRemoteServerConfig;
+/**
+ * The resolver's internal server shape: the **config contract**, plus the two
+ * fields only the resolver's internals carry.
+ *
+ * ⚠️ Derived from the contract deliberately. This shape used to be declared
+ * independently in **four** files — the contract, plus hand-kept mirrors in
+ * `toolhub-mcp.ts`, `toolhub-sdk-adapters.ts` and this module — and **none of
+ * them imported the contract**. That four-fold duplication is what let
+ * `protocolVersion` (the config surface's name) and `protocolEra` (the adapters'
+ * name) drift apart unnoticed: both sides compiled, every server resolved to
+ * `"legacy"`, and a green ~79-test era suite certified a feature that never
+ * reached the wire.
+ *
+ * Deriving from the contract means a rename or an added field there now breaks
+ * the consumer at **compile time** instead of silently at runtime. Do not
+ * re-declare this shape locally — import one of the three below.
+ */
+export type NormalizedRemoteServerConfig = ContractRemoteServerConfig & ResolverInternalFields;
+export type NormalizedStdioServerConfig = ContractStdioServerConfig & ResolverInternalFields;
+export type NormalizedServerConfig = ContractServerConfig & ResolverInternalFields;
 
 export function normalizeServerConfig(value: unknown): NormalizedServerConfig | undefined {
   if (!isRecord(value)) {

@@ -22,7 +22,12 @@ import {
   HttpMcpSdkAdapter,
   StdioMcpSdkAdapter
 } from "./toolhub-sdk-adapters";
-import { normalizeServerConfig } from "./toolhub-server-config";
+import {
+  normalizeServerConfig,
+  type NormalizedRemoteServerConfig,
+  type NormalizedServerConfig,
+  type NormalizedStdioServerConfig
+} from "./toolhub-server-config";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -55,33 +60,14 @@ type JsonRpcResponse =
       jsonrpc: "2.0";
     };
 
-type GatewayMcpServerBaseConfig = {
-  label?: string;
-  name: string;
-  protocolVersion?: string;
-  requestTimeoutMs?: number;
-  startupTimeoutMs?: number;
-  transport: "stdio" | "streamable-http" | "sse";
-};
-
-type GatewayMcpStdioServerConfig = GatewayMcpServerBaseConfig & {
-  args?: string[];
-  command: string;
-  cwd?: string;
-  env?: Record<string, string>;
-  stdioMessageMode?: "content-length" | "newline-json";
-  transport: "stdio";
-};
-
-type GatewayMcpRemoteServerConfig = GatewayMcpServerBaseConfig & {
-  apiKey?: string;
-  apiKeyEnv?: string;
-  headers?: Record<string, string>;
-  transport: "streamable-http" | "sse";
-  url: string;
-};
-
-type GatewayMcpServerConfig = GatewayMcpStdioServerConfig | GatewayMcpRemoteServerConfig;
+// ⚠️ Do NOT re-declare the server shape here. It is derived from the config
+// contract in `toolhub-server-config.ts`, and the alias is kept only so the call
+// sites below read unchanged. A hand-kept local mirror is exactly what let the
+// `protocolVersion` / `protocolEra` seam open silently while every type check
+// passed (fixed 2026-10-08, fork 5d1b4663).
+type GatewayMcpServerConfig = NormalizedServerConfig;
+type GatewayMcpRemoteServerConfig = NormalizedRemoteServerConfig;
+type GatewayMcpStdioServerConfig = NormalizedStdioServerConfig;
 
 type ToolDefinition = {
   description?: string;
@@ -2383,16 +2369,19 @@ function normalizeSchemaPropertyName(name: string): string {
 }
 
 function cloneServerConfig(config: GatewayMcpServerConfig): GatewayMcpServerConfig {
+  // `args` / `env` / `headers` are REQUIRED by the config contract, and
+  // `normalizeServerConfig` always materialises them, so the previous
+  // `config.args ? … : undefined` branches could never take the else arm.
   if (config.transport === "stdio") {
     return {
       ...config,
-      args: config.args ? [...config.args] : undefined,
-      env: config.env ? { ...config.env } : undefined
+      args: [...config.args],
+      env: { ...config.env }
     };
   }
   return {
     ...config,
-    headers: config.headers ? { ...config.headers } : undefined
+    headers: { ...config.headers }
   };
 }
 

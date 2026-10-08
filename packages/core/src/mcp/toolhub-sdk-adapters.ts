@@ -24,6 +24,10 @@ import { resolveProtocolEra } from "@ccr/core/mcp/protocol-era";
 import type { McpProtocolEra } from "@ccr/core/mcp/protocol-era";
 import { ProtocolEraCache } from "@ccr/core/mcp/protocol-probe";
 import { isSessionLossError } from "@ccr/core/mcp/toolhub-mcp-session";
+import type {
+  NormalizedRemoteServerConfig,
+  NormalizedStdioServerConfig
+} from "@ccr/core/mcp/toolhub-server-config";
 
 // ── Type mirrors of toolhub-mcp.ts server config types ──────────────
 
@@ -42,34 +46,14 @@ type ToolDefinition = {
   title?: string;
 };
 
-type GatewayMcpRemoteServerConfig = {
-  label?: string;
-  name: string;
-  protocolEra?: McpProtocolEra;
-  protocolVersion?: string;
-  requestTimeoutMs?: number;
-  startupTimeoutMs?: number;
-  transport: "streamable-http" | "sse";
-  url: string;
-  apiKey?: string;
-  apiKeyEnv?: string;
-  headers?: Record<string, string>;
-};
-
-type GatewayMcpStdioServerConfig = {
-  label?: string;
-  name: string;
-  protocolEra?: McpProtocolEra;
-  protocolVersion?: string;
-  requestTimeoutMs?: number;
-  startupTimeoutMs?: number;
-  transport: "stdio";
-  command: string;
-  args?: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-  stdioMessageMode?: "content-length" | "newline-json";
-};
+// ⚠️ Do NOT re-declare the server shape here. It is derived from the config
+// contract in `toolhub-server-config.ts`. A hand-kept mirror in this file is what
+// let `protocolVersion` (the config's name) and `protocolEra` (the name read
+// below) diverge with nothing failing — both sides compiled, every server
+// resolved to "legacy", and a green ~79-test era suite certified it. Fixed
+// 2026-10-08, fork 5d1b4663.
+type GatewayMcpRemoteServerConfig = NormalizedRemoteServerConfig;
+type GatewayMcpStdioServerConfig = NormalizedStdioServerConfig;
 
 // ── Shared constants ────────────────────────────────────────────────
 
