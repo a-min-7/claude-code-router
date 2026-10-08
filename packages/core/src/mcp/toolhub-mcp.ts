@@ -1651,6 +1651,7 @@ function normalizeServerConfig(value: unknown): GatewayMcpServerConfig | undefin
   const base = {
     label: typeof value.label === "string" && value.label.trim() ? value.label.trim() : undefined,
     name,
+    protocolEra: typeof value.protocolEra === "string" ? value.protocolEra : undefined,
     protocolVersion: typeof value.protocolVersion === "string" ? value.protocolVersion : protocolVersion,
     requestTimeoutMs: normalizeTimeout(value.requestTimeoutMs, defaultRequestTimeoutMs),
     startupTimeoutMs: normalizeTimeout(value.startupTimeoutMs, defaultRequestTimeoutMs),

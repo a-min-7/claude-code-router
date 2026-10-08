@@ -16,10 +16,13 @@ import {
   Client as SdkClient,
   SSEClientTransport,
   StreamableHTTPClientTransport,
-  type InitializeRequest
+  type PriorDiscovery
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
+import { MODERN_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
+import { resolveProtocolEra } from "@ccr/core/mcp/protocol-era";
+import type { McpProtocolEra } from "@ccr/core/mcp/protocol-era";
+import { ProtocolEraCache } from "@ccr/core/mcp/protocol-probe";
 import { isSessionLossError } from "@ccr/core/mcp/toolhub-mcp-session";
 
 // ── Type mirrors of toolhub-mcp.ts server config types ──────────────
@@ -42,6 +45,7 @@ type ToolDefinition = {
 type GatewayMcpRemoteServerConfig = {
   label?: string;
   name: string;
+  protocolEra?: McpProtocolEra;
   protocolVersion?: string;
   requestTimeoutMs?: number;
   startupTimeoutMs?: number;
@@ -55,6 +59,7 @@ type GatewayMcpRemoteServerConfig = {
 type GatewayMcpStdioServerConfig = {
   label?: string;
   name: string;
+  protocolEra?: McpProtocolEra;
   protocolVersion?: string;
   requestTimeoutMs?: number;
   startupTimeoutMs?: number;
@@ -68,7 +73,6 @@ type GatewayMcpStdioServerConfig = {
 
 // ── Shared constants ────────────────────────────────────────────────
 
-const LEGACY = LEGACY_PROTOCOL_VERSION;
 const TOOLHUB_NAME = "ccr-toolhub";
 
 // ─── SSE adapter ────────────────────────────────────────────────────
@@ -86,12 +90,16 @@ class SseMcpSdkAdapter implements McpClient {
   private sdkClient: SdkClient | undefined;
   private connected = false;
   private initialized = false;
+  private era: McpProtocolEra = "legacy";
   private recovery: Promise<void> | undefined;
+  private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
     private readonly server: GatewayMcpRemoteServerConfig,
     private readonly normalizeToolList: (value: unknown) => ToolDefinition[]
-  ) {}
+  ) {
+    this.era = resolveProtocolEra(this.server.protocolEra);
+  }
 
   async listTools(): Promise<ToolDefinition[]> {
     return this.withSessionRecovery(async () => {
@@ -122,6 +130,33 @@ class SseMcpSdkAdapter implements McpClient {
     this.sdkClient = undefined;
   }
 
+  /** Build the prior-discovery value for this server's era. */
+  private priorDiscovery(): PriorDiscovery {
+    const era = this.era;
+    if (era === "legacy") {
+      return { kind: "legacy" as const };
+    }
+    if (era === "auto") {
+      const cached = SseMcpSdkAdapter.probeCache.get(this.server.url);
+      if (cached === "legacy") return { kind: "legacy" as const };
+      return {
+        kind: "modern" as const,
+        discover: {
+          supportedVersions: [MODERN_PROTOCOL_VERSION],
+          capabilities: { tools: {} }
+        }
+      } as unknown as PriorDiscovery;
+    }
+    // era === "2026-07-28" (pinned modern)
+    return {
+      kind: "modern" as const,
+      discover: {
+        supportedVersions: [MODERN_PROTOCOL_VERSION],
+        capabilities: { tools: {} }
+      }
+    } as unknown as PriorDiscovery;
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -149,21 +184,22 @@ class SseMcpSdkAdapter implements McpClient {
     }
     if (!this.connected) {
       const transport = this.sdkTransport!;
-      await this.sdkClient.connect(transport);
+      if (this.era === "legacy") {
+        // Legacy era: skip auto-probe, run the plain legacy handshake.
+        // The SDK's _connectPlainLegacy handles initialize + notification.
+        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+      } else if (this.era === "auto") {
+        // Auto era: let SDK probe (default connect behavior).
+        // The SDK probes server/discover and falls back to legacy initialize.
+        await this.sdkClient.connect(transport);
+      } else {
+        // Pinned modern: use prior with a 2026-07-28 DiscoverResult.
+        // The SDK will verify 2026-07-28 overlap and fail loudly if the
+        // server cannot do modern. No probe needed — we assert the result.
+        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+      }
       this.connected = true;
     }
-    // Send initialize request via SDK's request() method.
-    const initializeRequest: InitializeRequest = {
-      method: "initialize",
-      params: {
-        capabilities: {},
-        clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
-        protocolVersion: this.server.protocolVersion ?? LEGACY
-      }
-    };
-    await this.sdkClient.request(initializeRequest);
-    // Send initialized notification.
-    await this.sdkClient.notification({ method: "notifications/initialized" }).catch(() => undefined);
     this.initialized = true;
   }
 
@@ -200,12 +236,16 @@ class HttpMcpSdkAdapter implements McpClient {
   private sdkClient: SdkClient | undefined;
   private connected = false;
   private initialized = false;
+  private era: McpProtocolEra = "legacy";
   private recovery: Promise<void> | undefined;
+  private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
     private readonly server: GatewayMcpRemoteServerConfig,
     private readonly normalizeToolList: (value: unknown) => ToolDefinition[]
-  ) {}
+  ) {
+    this.era = resolveProtocolEra(this.server.protocolEra);
+  }
 
   async listTools(): Promise<ToolDefinition[]> {
     return this.withSessionRecovery(async () => {
@@ -234,6 +274,33 @@ class HttpMcpSdkAdapter implements McpClient {
     this.connected = false;
     this.sdkTransport = undefined;
     this.sdkClient = undefined;
+  }
+
+  /** Build the prior-discovery value for this server's era. */
+  private priorDiscovery(): PriorDiscovery {
+    const era = this.era;
+    if (era === "legacy") {
+      return { kind: "legacy" as const };
+    }
+    if (era === "auto") {
+      const cached = HttpMcpSdkAdapter.probeCache.get(this.server.url);
+      if (cached === "legacy") return { kind: "legacy" as const };
+      return {
+        kind: "modern" as const,
+        discover: {
+          supportedVersions: [MODERN_PROTOCOL_VERSION],
+          capabilities: { tools: {} }
+        }
+      } as unknown as PriorDiscovery;
+    }
+    // era === "2026-07-28" (pinned modern)
+    return {
+      kind: "modern" as const,
+      discover: {
+        supportedVersions: [MODERN_PROTOCOL_VERSION],
+        capabilities: { tools: {} }
+      }
+    } as unknown as PriorDiscovery;
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -270,19 +337,22 @@ class HttpMcpSdkAdapter implements McpClient {
       );
     }
     if (!this.connected) {
-      await this.sdkClient.connect(this.sdkTransport!);
+      const transport = this.sdkTransport!;
+      if (this.era === "legacy") {
+        // Legacy era: skip auto-probe, run the plain legacy handshake.
+        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+      } else if (this.era === "auto") {
+        // Auto era: let SDK probe (default connect behavior).
+        // The SDK probes server/discover and falls back to legacy initialize.
+        await this.sdkClient.connect(transport);
+      } else {
+        // Pinned modern: use prior with a 2026-07-28 DiscoverResult.
+        // The SDK will verify 2026-07-28 overlap and fail loudly if the
+        // server cannot do modern. No probe needed — we assert the result.
+        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+      }
       this.connected = true;
     }
-    const initializeRequest: InitializeRequest = {
-      method: "initialize",
-      params: {
-        capabilities: {},
-        clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
-        protocolVersion: this.server.protocolVersion ?? LEGACY
-      }
-    };
-    await this.sdkClient.request(initializeRequest);
-    await this.sdkClient.notification({ method: "notifications/initialized" }).catch(() => undefined);
     this.initialized = true;
   }
 
@@ -319,11 +389,14 @@ class StdioMcpSdkAdapter implements McpClient {
   private sdkClient: SdkClient | undefined;
   private connected = false;
   private initialized = false;
+  private era: McpProtocolEra = "legacy";
 
   constructor(
     private readonly server: GatewayMcpStdioServerConfig,
     private readonly normalizeToolList: (value: unknown) => ToolDefinition[]
-  ) {}
+  ) {
+    this.era = resolveProtocolEra(this.server.protocolEra);
+  }
 
   async listTools(): Promise<ToolDefinition[]> {
     await this.ensureInitialized();
@@ -350,6 +423,18 @@ class StdioMcpSdkAdapter implements McpClient {
     this.sdkClient = undefined;
   }
 
+  private priorDiscovery(): PriorDiscovery {
+    // stdio servers are always legacy (no HTTP headers possible).
+    // Forcing modern on a stdio transport will always fail.
+    if (this.era === "legacy") {
+      return { kind: "legacy" as const };
+    }
+    // auto or pinned modern — stdio auto-probe runs the probe, so
+    // "auto" works. Pinned modern on stdio will throw EraNegotiationFailed
+    // (expected: a stdio server cannot do modern-era headers).
+    return { kind: "legacy" as const };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -370,18 +455,16 @@ class StdioMcpSdkAdapter implements McpClient {
       );
     }
     if (!this.connected) {
-      await this.sdkClient.connect(this.sdkTransport!);
+      const transport = this.sdkTransport!;
+      if (this.era === "legacy") {
+        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+      } else {
+        // auto or pinned modern on stdio: let SDK auto-probe.
+        // If pinned modern and server doesn't support it, SDK throws.
+        await this.sdkClient.connect(transport);
+      }
       this.connected = true;
     }
-    const initializeRequest: InitializeRequest = {
-      method: "initialize",
-      params: {
-        capabilities: {},
-        clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
-        protocolVersion: this.server.protocolVersion ?? LEGACY
-      }
-    };
-    await this.sdkClient.request(initializeRequest);
     this.initialized = true;
   }
 }
