@@ -78,6 +78,7 @@
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/core": "2.3.1",
+    "@modelcontextprotocol/ext-tasks": "^0.2.2",
     "@the-next-ai/ai-gateway": "^1.0.21",
     "@the-next-ai/bot-gateway-sdk": "^0.1.0",
     "better-sqlite3": "^12.11.1",
