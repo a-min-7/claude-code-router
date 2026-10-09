@@ -32,7 +32,7 @@
 // `callTool` branch runs unchanged.
 // ──────────────────────────────────────────────────────────────────────────────
 
-import { ProtocolError } from "@modelcontextprotocol/client";
+import { INTERNAL_ERROR, ProtocolError } from "@modelcontextprotocol/client";
 import type { Transport } from "@modelcontextprotocol/client";
 import {
   createApplicationInputHandler,
@@ -401,8 +401,11 @@ export async function attachToolHubTaskRuntime(options: {
       : { transport: { type: "http", url: server.url ?? "" } })
   });
 
+  // ⚠️ Attach only once the session exists. Attaching first would leave a wrapper
+  // installed on this transport's `onmessage`/`onclose` for the client's whole
+  // lifetime if the factory below throws — inert, but unclaimed state that nothing
+  // ever removes.
   const channel = new RawRequestChannel(transport, options.serverConfigTimeoutMs);
-  channel.attach();
 
   const session: TaskEnabledSession = createTaskSessionFromClient(client, {
     endpointId,
@@ -433,6 +436,8 @@ export async function attachToolHubTaskRuntime(options: {
     channel.detach();
     return undefined;
   }
+
+  channel.attach();
 
   return {
     async execute(name, args, requestTimeoutMs) {
@@ -476,6 +481,14 @@ async function runTaskBackedCallTool(options: {
   deadline.tighten(HARD_MAX_TASK_DEADLINE_MS);
   const watchController = new AbortController();
   let current: ToolExecution<LiftedToolResult> = execution;
+  /**
+   * ⚠️ Set only on the one path that returns a result to the caller. Every other
+   * exit — a non-transient poll error, exhausted retries, a failed re-attach, the
+   * deadline — leaves the remote task RUNNING, and an upstream task nobody polls
+   * and nobody cancels keeps executing and billing. `close()` does not cancel it:
+   * ext-tasks documents that as releasing local ownership.
+   */
+  let settledForCaller = false;
 
   try {
     // Narrow the deadline from the task's own TTL as soon as the first
@@ -490,6 +503,7 @@ async function runTaskBackedCallTool(options: {
         const raw = resultFromTaskOutcome(settlement.outcome) as LiftedToolResult;
         // Match `Client.callTool`'s lifted shape: the wire-only discriminator is stripped.
         const { resultType: _wireOnly, ...lifted } = raw;
+        settledForCaller = true;
         return lifted;
       } catch (error) {
         lastError = error;
@@ -506,11 +520,14 @@ async function runTaskBackedCallTool(options: {
     throw toCallToolError(lastError, deadline.signal);
   } finally {
     watchController.abort();
-    // Propagate a local abort as a cooperative remote cancellation: the signal
-    // may already have fired while `callTool` was resolving, so fire directly.
-    // Awaited — but with a short budget, so a dead transport cannot turn a
-    // deadline into a two-minute wait before the caller sees the failure.
-    if (deadline.signal.aborted) {
+    // Cooperatively cancel anything we are walking away from, so a task is never
+    // orphaned. This covers the deadline AND every error exit. On an exit where
+    // the task had already reached a terminal state the call is a no-op — the
+    // spec requires the server to acknowledge cancellation whether or not it can
+    // honour it — so over-cancelling is cheaper than losing the job. Awaited, but
+    // with a short budget, so a dead transport cannot turn a failure into a
+    // two-minute wait before the caller sees it.
+    if (!settledForCaller) {
       await Promise.race([
         current.cancel().catch(() => undefined),
         new Promise((resolve) => setTimeout(resolve, CANCEL_DISPATCH_BUDGET_MS))
@@ -530,7 +547,7 @@ async function watchTaskTtl(
   try {
     for await (const event of execution.updates(signal)) {
       if (event.type === "task") {
-        deadline.tighten(taskDeadlineMs(event.task.retentionMs));
+        deadline.tighten(taskDeadlineMs(event.task.retentionMs, event.task.createdAt));
       }
     }
   } catch {
@@ -588,18 +605,26 @@ function isTransientTaskError(error: unknown): boolean {
  * the typed `ProtocolError` subclass for their code, so the adapters' existing
  * session-recovery classification keeps working.
  */
-function toCallToolError(error: unknown, signal: AbortSignal | undefined): unknown {
+export function toCallToolError(error: unknown, signal: AbortSignal | undefined): unknown {
   if (error instanceof TaskCancelledError && signal?.aborted === true) {
     return abortReason(signal);
   }
   if (error instanceof JsonRpcResponseError) {
     return ProtocolError.fromError(error.code, error.message, error.data as never);
   }
-  if (error instanceof TaskFailedError && error.code !== undefined) {
-    return ProtocolError.fromError(error.code, error.message, error.data as never);
+  if (error instanceof TaskFailedError) {
+    // ⚠️ Not every task failure carries a protocol code — a code-less one used to
+    // fall through to the raw `TaskFailedError`, which the adapters' session-loss
+    // classification cannot read and which `Client.callTool` would never have
+    // produced. Give it the JSON-RPC internal-error code so every failure leaving
+    // here is a typed ProtocolError.
+    return ProtocolError.fromError(error.code ?? INTERNAL_ERROR, error.message, error.data as never);
   }
   if (error instanceof DispatchError) {
-    return error.cause ?? error;
+    // The cause may itself be a JSON-RPC error, so re-map it rather than leaking it.
+    return error.cause instanceof JsonRpcResponseError
+      ? ProtocolError.fromError(error.cause.code, error.cause.message, error.cause.data as never)
+      : error.cause ?? error;
   }
   return error;
 }
@@ -651,12 +676,36 @@ function createDeadline(): Deadline {
  * than asserted in a comment: an absent or non-positive `ttlMs` means unlimited
  * retention, which is bounded by the hard ceiling; otherwise stop one request's
  * worth short of the TTL.
+ *
+ * ⚠️ `ttlMs` is measured **from the task's creation**, not from when we happen to
+ * observe it (SEP-2663, and rmcp's `Task` says so outright). So the elapsed time
+ * since `createdAt` comes off the budget — otherwise a late first observation
+ * arms a deadline *past* the moment the server discards the task, and the task
+ * we are still polling no longer exists.
  */
-export function taskDeadlineMs(ttlMs: number | null | undefined): number {
+export function taskDeadlineMs(
+  ttlMs: number | null | undefined,
+  createdAt?: string,
+  now: number = Date.now()
+): number {
   if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs) || ttlMs <= 0) {
     return HARD_MAX_TASK_DEADLINE_MS;
   }
-  return Math.max(1, Math.min(ttlMs - TASK_DEADLINE_HEADROOM_MS, HARD_MAX_TASK_DEADLINE_MS));
+  const elapsedMs = elapsedSince(createdAt, now);
+  const remainingMs = ttlMs - elapsedMs - TASK_DEADLINE_HEADROOM_MS;
+  return Math.max(1, Math.min(remainingMs, HARD_MAX_TASK_DEADLINE_MS));
+}
+
+/** Milliseconds since an ISO timestamp, or 0 when it is absent or unparseable. */
+function elapsedSince(createdAt: string | undefined, now: number): number {
+  if (typeof createdAt !== "string" || !createdAt) {
+    return 0;
+  }
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) {
+    return 0;
+  }
+  return Math.max(0, now - createdMs);
 }
 
 /** The task's raw `Task` view, exposed for tests that need a snapshot shape. */
