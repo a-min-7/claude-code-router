@@ -21,7 +21,13 @@ import test from "node:test";
 import http from "node:http";
 import { HttpMcpSdkAdapter } from "@ccr/core/mcp/toolhub-sdk-adapters.ts";
 import { TASKS_EXTENSION_ID } from "@ccr/core/mcp/protocol-era";
-import { serverAdvertisesTasks, taskDeadlineMs, TASK_DEADLINE_LIMITS } from "@ccr/core/mcp/toolhub-tasks.ts";
+import {
+  serverAdvertisesTasks,
+  taskDeadlineMs,
+  toCallToolError,
+  TASK_DEADLINE_LIMITS
+} from "@ccr/core/mcp/toolhub-tasks.ts";
+import { TaskFailedError } from "@modelcontextprotocol/ext-tasks/client";
 
 const PROTOCOL = "2026-07-28";
 const TOOL_NAME = "perplexity_research";
@@ -180,6 +186,16 @@ async function startFixture({
             });
             return;
           }
+          if (taskStatus === "errored") {
+            // The poll itself fails at the JSON-RPC layer — no result at all. The
+            // task is still running upstream, which is the whole point: walking
+            // away from here without cancelling orphans a job that keeps billing.
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32603, message: "the poll exploded" } })
+            );
+            return;
+          }
           if (taskStatus === "failed") {
             // SEP-2663: a terminal `failed` task carries the JSON-RPC error that
             // caused it, in the same shape the original request would have thrown.
@@ -262,6 +278,33 @@ test("taskDeadlineMs stops one request short of the task TTL and is capped", () 
   assert.ok(taskDeadlineMs(500) >= 1, "a TTL shorter than the headroom still yields a positive deadline");
 });
 
+test("taskDeadlineMs subtracts the time already elapsed since the task was created", () => {
+  // `ttlMs` runs from CREATION, not from when we first observe the task. Arming
+  // the full TTL at observation time would put the deadline past the moment the
+  // server discards it — and we would still be polling a task that is already gone.
+  const createdMs = 1_000_000;
+  const created = new Date(createdMs).toISOString();
+  const headroom = TASK_DEADLINE_LIMITS.headroomMs;
+
+  assert.equal(
+    taskDeadlineMs(60_000, created, createdMs + 30_000),
+    60_000 - 30_000 - headroom,
+    "a task created 30 s ago has 30 s of TTL left, not 60"
+  );
+  assert.equal(taskDeadlineMs(60_000, undefined, createdMs + 30_000), 60_000 - headroom, "no createdAt means nothing to subtract");
+  assert.equal(taskDeadlineMs(60_000, "not-a-date", createdMs + 30_000), 60_000 - headroom, "an unparseable createdAt is ignored");
+  assert.ok(taskDeadlineMs(60_000, created, createdMs + 120_000) >= 1, "already past the TTL floors at 1, never negative");
+});
+
+test("a task failure with no protocol code still becomes a typed ProtocolError", () => {
+  // A code-less TaskFailedError used to fall through to the raw ext-tasks class,
+  // which the adapters' session-loss classification cannot read and which
+  // Client.callTool would never have produced.
+  const mapped = toCallToolError(new TaskFailedError("the job died"), undefined);
+  assert.equal(mapped?.code, -32603, `a code-less failure must not leak the raw class, got ${mapped?.constructor?.name}`);
+  assert.ok(String(mapped?.message).includes("the job died"), "the message must survive");
+});
+
 // ── The behaviour the whole change exists for ─────────────────────────
 
 test("a task-returning server yields the task's final result, not a failure", async () => {
@@ -299,6 +342,31 @@ test("a failed task surfaces the server's own JSON-RPC error, not a generic one"
       }
     );
     assert.ok(fixture.countOf("tasks/get") >= 1, "it must have polled to learn the task failed");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a failed poll cancels the still-running task instead of orphaning it", async () => {
+  // ⚠️ The money leak this pins: the poll fails for a non-retryable reason, so the
+  // call throws — but the task is still executing upstream. Walking away without
+  // cancelling leaves a job that keeps running and billing with nobody polling it.
+  const fixture = await startFixture({ toolBehaviour: "task", taskStatus: "errored" });
+  try {
+    await assert.rejects(
+      () =>
+        withAdapter(makeServerConfig({ url: fixture.url }), (adapter) => adapter.callTool(TOOL_NAME, { input: "q" })),
+      (error) => {
+        assert.ok(error instanceof Error, `expected a failure, got ${String(error)}`);
+        return true;
+      }
+    );
+    assert.ok(fixture.countOf("tasks/get") >= 1, "it must have polled before failing");
+    assert.equal(
+      fixture.countOf("tasks/cancel"),
+      1,
+      "leaving a running task behind must cancel it, not orphan it"
+    );
   } finally {
     await fixture.close();
   }
