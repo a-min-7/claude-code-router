@@ -96,7 +96,12 @@ class SseMcpSdkAdapter implements McpClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      const result = await this.sdkClient!.callTool({ name, arguments: args });
+      // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
+      // DEFAULT_REQUEST_TIMEOUT_MSEC (60 s), silently discarding the per-server
+      // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
+      // used it as the default for every request. Measured 2026-10-09: a 65 s tool call
+      // was rejected at 60.0 s against a server configured for 120 s.
+      const result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
       if ((result as Record<string, unknown>).isError === true) {
         const isErrorResult = result as Record<string, unknown>;
         throw new Error(
@@ -242,7 +247,12 @@ class HttpMcpSdkAdapter implements McpClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
-      const result = await this.sdkClient!.callTool({ name, arguments: args });
+      // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
+      // DEFAULT_REQUEST_TIMEOUT_MSEC (60 s), silently discarding the per-server
+      // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
+      // used it as the default for every request. Measured 2026-10-09: a 65 s tool call
+      // was rejected at 60.0 s against a server configured for 120 s.
+      const result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
       if ((result as Record<string, unknown>).isError === true) {
         const isErrorResult = result as Record<string, unknown>;
         throw new Error(
@@ -390,7 +400,9 @@ class StdioMcpSdkAdapter implements McpClient {
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     await this.ensureInitialized();
-    const result = await this.sdkClient!.callTool({ name, arguments: args });
+    // See the note on the SSE adapter's callTool: the SDK default (60 s) must not
+    // replace the per-server `requestTimeoutMs`.
+    const result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
     if ((result as Record<string, unknown>).isError === true) {
       const isErrorResult = result as Record<string, unknown>;
       throw new Error(
