@@ -25,6 +25,7 @@ import { resolveProtocolEra, toolHubClientCapabilities } from "@ccr/core/mcp/pro
 import type { McpProtocolEra } from "@ccr/core/mcp/protocol-era";
 import { ProtocolEraCache } from "@ccr/core/mcp/protocol-probe";
 import { isSessionLossError } from "@ccr/core/mcp/toolhub-mcp-session";
+import { attachToolHubTaskRuntime, type ToolHubTaskRuntime } from "@ccr/core/mcp/toolhub-tasks";
 import type {
   NormalizedRemoteServerConfig,
   NormalizedStdioServerConfig
@@ -77,6 +78,10 @@ class SseMcpSdkAdapter implements McpClient {
   private initialized = false;
   private era: McpProtocolEra = "legacy";
   private recovery: Promise<void> | undefined;
+  /** Present only when this server advertises the Tasks extension — see toolhub-tasks.ts. */
+  private taskRuntime: ToolHubTaskRuntime | undefined;
+  /** The client the runtime above is attached to; a new client invalidates it. */
+  private taskRuntimeClient: SdkClient | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -97,6 +102,12 @@ class SseMcpSdkAdapter implements McpClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
+      await this.resolveTaskRuntime();
+      if (this.taskRuntime) {
+        // The server may answer with a task handle, which the SDK's own callTool
+        // cannot even parse — see toolhub-tasks.ts.
+        return this.taskRuntime.execute(name, args, this.server.requestTimeoutMs);
+      }
       // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
       // DEFAULT_REQUEST_TIMEOUT_MSEC (60 s), silently discarding the per-server
       // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
@@ -184,8 +195,8 @@ class SseMcpSdkAdapter implements McpClient {
         // The SDK probes server/discover and falls back to legacy initialize.
         await this.sdkClient.connect(transport);
       } else {
-        // Pinned modern: probe, so the SDK learns the server's REAL DiscoverResult.
-        // See versionNegotiationForEra.
+        // Pinned modern: let the SDK probe, so it learns the server's REAL
+        // DiscoverResult. See versionNegotiationForEra.
         await this.sdkClient.connect(transport);
       }
       this.connected = true;
@@ -217,6 +228,39 @@ class SseMcpSdkAdapter implements McpClient {
     this.sdkClient = undefined;
     await this.ensureInitialized();
   }
+
+  /**
+   * Attach the Tasks runtime, once, to the client currently in use.
+   *
+   * ⚠️ Keyed on the client instance rather than a boolean, so the session
+   * recovery above — which discards the transport *and* the client and builds
+   * new ones — automatically retires a runtime that is now wired to a dead
+   * transport. Attaching is a no-op for servers that do not advertise the
+   * extension, and a failure to attach must never break the plain path: tasks
+   * are an enhancement, so this swallows its own errors by design.
+   */
+  private async resolveTaskRuntime(): Promise<void> {
+    const client = this.sdkClient;
+    const transport = this.sdkTransport;
+    if (client === undefined || transport === undefined || this.taskRuntimeClient === client) {
+      return;
+    }
+    await this.taskRuntime?.close().catch(() => undefined);
+    this.taskRuntime = undefined;
+    this.taskRuntimeClient = client;
+    try {
+      this.taskRuntime = await attachToolHubTaskRuntime({
+        client,
+        transport,
+        server: { name: this.server.name, url: this.server.url },
+        serverConfigTimeoutMs: this.server.requestTimeoutMs,
+        clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
+        clientCapabilities: toolHubClientCapabilities()
+      });
+    } catch {
+      this.taskRuntime = undefined;
+    }
+  }
 }
 
 // ─── HTTP (StreamableHTTP) adapter ───────────────────────────────────
@@ -228,6 +272,10 @@ class HttpMcpSdkAdapter implements McpClient {
   private initialized = false;
   private era: McpProtocolEra = "legacy";
   private recovery: Promise<void> | undefined;
+  /** Present only when this server advertises the Tasks extension — see toolhub-tasks.ts. */
+  private taskRuntime: ToolHubTaskRuntime | undefined;
+  /** The client the runtime above is attached to; a new client invalidates it. */
+  private taskRuntimeClient: SdkClient | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -248,6 +296,12 @@ class HttpMcpSdkAdapter implements McpClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
+      await this.resolveTaskRuntime();
+      if (this.taskRuntime) {
+        // The server may answer with a task handle, which the SDK's own callTool
+        // cannot even parse — see toolhub-tasks.ts.
+        return this.taskRuntime.execute(name, args, this.server.requestTimeoutMs);
+      }
       // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
       // DEFAULT_REQUEST_TIMEOUT_MSEC (60 s), silently discarding the per-server
       // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
@@ -342,8 +396,8 @@ class HttpMcpSdkAdapter implements McpClient {
         // The SDK probes server/discover and falls back to legacy initialize.
         await this.sdkClient.connect(transport);
       } else {
-        // Pinned modern: probe, so the SDK learns the server's REAL DiscoverResult.
-        // See versionNegotiationForEra.
+        // Pinned modern: let the SDK probe, so it learns the server's REAL
+        // DiscoverResult. See versionNegotiationForEra.
         await this.sdkClient.connect(transport);
       }
       this.connected = true;
@@ -374,6 +428,30 @@ class HttpMcpSdkAdapter implements McpClient {
     this.sdkTransport = undefined;
     this.sdkClient = undefined;
     await this.ensureInitialized();
+  }
+
+  /** See the note on the SSE adapter's resolveTaskRuntime. */
+  private async resolveTaskRuntime(): Promise<void> {
+    const client = this.sdkClient;
+    const transport = this.sdkTransport;
+    if (client === undefined || transport === undefined || this.taskRuntimeClient === client) {
+      return;
+    }
+    await this.taskRuntime?.close().catch(() => undefined);
+    this.taskRuntime = undefined;
+    this.taskRuntimeClient = client;
+    try {
+      this.taskRuntime = await attachToolHubTaskRuntime({
+        client,
+        transport,
+        server: { name: this.server.name, url: this.server.url },
+        serverConfigTimeoutMs: this.server.requestTimeoutMs,
+        clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
+        clientCapabilities: toolHubClientCapabilities()
+      });
+    } catch {
+      this.taskRuntime = undefined;
+    }
   }
 }
 
@@ -468,20 +546,6 @@ class StdioMcpSdkAdapter implements McpClient {
 
 export { HttpMcpSdkAdapter, SseMcpSdkAdapter, StdioMcpSdkAdapter };
 
-/**
- * The `versionNegotiation` a client needs for this server's era.
- *
- * ⚠️ `prior` is an *assertion*, not a probe: when the pinned-modern branch passed
- * `{ kind: "modern", discover }`, the SDK never sent `server/discover` and took
- * `discover.capabilities` — a hard-coded `{ tools: {} }` — as the server's
- * capabilities (SDK 2.3.1, `dist/index.mjs:3471-3479`). Everything derived from
- * `getServerCapabilities()` was therefore blind: the Tasks extension this fleet
- * declares could never be observed as advertised by any server, and any future
- * capability-gated feature would silently do nothing on a pinned-modern server.
- *
- * Probing gives the SDK the server's real DiscoverResult while keeping the pin's
- * semantics — no modern overlap still fails loudly rather than falling back.
- */
 function versionNegotiationForEra(era: McpProtocolEra): { versionNegotiation?: VersionNegotiationOptions } {
   if (era === "auto") {
     return { versionNegotiation: { mode: "auto" as const } };
