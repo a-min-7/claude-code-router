@@ -100,12 +100,14 @@ class SseMcpSdkAdapter implements McpClient {
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    let taskBacked = false;
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
       await this.resolveTaskRuntime();
       if (this.taskRuntime) {
         // The server may answer with a task handle, which the SDK's own callTool
         // cannot even parse — see toolhub-tasks.ts.
+        taskBacked = true;
         return this.taskRuntime.execute(name, args, this.server.requestTimeoutMs);
       }
       // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
@@ -121,7 +123,7 @@ class SseMcpSdkAdapter implements McpClient {
         );
       }
       return result;
-    });
+    }, () => !taskBacked);
   }
 
   async close(): Promise<void> {
@@ -204,11 +206,22 @@ class SseMcpSdkAdapter implements McpClient {
     this.initialized = true;
   }
 
-  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  private async withSessionRecovery<T>(
+    operation: () => Promise<T>,
+    /**
+     * ⚠️ A task-backed call must never be replayed. The retry re-issues
+     * `tools/call`, and a task-producing server answers it by creating a SECOND
+     * task upstream — while the first keeps running with nobody polling it. Both
+     * bill. Unreachable on today's config (tasks need a modern *stateless*
+     * connection, and the only path to `isSessionLossError` on one is a closed
+     * SSE stream, which no modern server here uses), but the guard is free.
+     */
+    isReplayable: () => boolean = () => true
+  ): Promise<T> {
     try {
       return await operation();
     } catch (error) {
-      if (!isSessionLossError(error)) {
+      if (!isSessionLossError(error) || !isReplayable()) {
         throw error;
       }
     }
@@ -294,12 +307,14 @@ class HttpMcpSdkAdapter implements McpClient {
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    let taskBacked = false;
     return this.withSessionRecovery(async () => {
       await this.ensureInitialized();
       await this.resolveTaskRuntime();
       if (this.taskRuntime) {
         // The server may answer with a task handle, which the SDK's own callTool
         // cannot even parse — see toolhub-tasks.ts.
+        taskBacked = true;
         return this.taskRuntime.execute(name, args, this.server.requestTimeoutMs);
       }
       // ⚠️ Pass the configured timeout explicitly. Without it the SDK falls back to
@@ -315,7 +330,7 @@ class HttpMcpSdkAdapter implements McpClient {
         );
       }
       return result;
-    });
+    }, () => !taskBacked);
   }
 
   async close(): Promise<void> {
@@ -405,11 +420,22 @@ class HttpMcpSdkAdapter implements McpClient {
     this.initialized = true;
   }
 
-  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  private async withSessionRecovery<T>(
+    operation: () => Promise<T>,
+    /**
+     * ⚠️ A task-backed call must never be replayed. The retry re-issues
+     * `tools/call`, and a task-producing server answers it by creating a SECOND
+     * task upstream — while the first keeps running with nobody polling it. Both
+     * bill. Unreachable on today's config (tasks need a modern *stateless*
+     * connection, and the only path to `isSessionLossError` on one is a closed
+     * SSE stream, which no modern server here uses), but the guard is free.
+     */
+    isReplayable: () => boolean = () => true
+  ): Promise<T> {
     try {
       return await operation();
     } catch (error) {
-      if (!isSessionLossError(error)) {
+      if (!isSessionLossError(error) || !isReplayable()) {
         throw error;
       }
     }
