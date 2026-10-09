@@ -16,7 +16,8 @@ import {
   Client as SdkClient,
   SSEClientTransport,
   StreamableHTTPClientTransport,
-  type PriorDiscovery
+  type PriorDiscovery,
+  type VersionNegotiationOptions
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { MODERN_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
@@ -167,7 +168,8 @@ class SseMcpSdkAdapter implements McpClient {
       this.sdkClient = new SdkClient(
         { name: TOOLHUB_NAME, version: "1.0.0" },
         {
-          capabilities: toolHubClientCapabilities()
+          capabilities: toolHubClientCapabilities(),
+          ...versionNegotiationForEra(this.era)
         }
       );
     }
@@ -182,10 +184,9 @@ class SseMcpSdkAdapter implements McpClient {
         // The SDK probes server/discover and falls back to legacy initialize.
         await this.sdkClient.connect(transport);
       } else {
-        // Pinned modern: use prior with a 2026-07-28 DiscoverResult.
-        // The SDK will verify 2026-07-28 overlap and fail loudly if the
-        // server cannot do modern. No probe needed — we assert the result.
-        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+        // Pinned modern: probe, so the SDK learns the server's REAL DiscoverResult.
+        // See versionNegotiationForEra.
+        await this.sdkClient.connect(transport);
       }
       this.connected = true;
     }
@@ -326,7 +327,8 @@ class HttpMcpSdkAdapter implements McpClient {
       this.sdkClient = new SdkClient(
         { name: TOOLHUB_NAME, version: "1.0.0" },
         {
-          capabilities: toolHubClientCapabilities()
+          capabilities: toolHubClientCapabilities(),
+          ...versionNegotiationForEra(this.era)
         }
       );
     }
@@ -340,10 +342,9 @@ class HttpMcpSdkAdapter implements McpClient {
         // The SDK probes server/discover and falls back to legacy initialize.
         await this.sdkClient.connect(transport);
       } else {
-        // Pinned modern: use prior with a 2026-07-28 DiscoverResult.
-        // The SDK will verify 2026-07-28 overlap and fail loudly if the
-        // server cannot do modern. No probe needed — we assert the result.
-        await this.sdkClient.connect(transport, { prior: this.priorDiscovery() });
+        // Pinned modern: probe, so the SDK learns the server's REAL DiscoverResult.
+        // See versionNegotiationForEra.
+        await this.sdkClient.connect(transport);
       }
       this.connected = true;
     }
@@ -466,3 +467,27 @@ class StdioMcpSdkAdapter implements McpClient {
 }
 
 export { HttpMcpSdkAdapter, SseMcpSdkAdapter, StdioMcpSdkAdapter };
+
+/**
+ * The `versionNegotiation` a client needs for this server's era.
+ *
+ * ⚠️ `prior` is an *assertion*, not a probe: when the pinned-modern branch passed
+ * `{ kind: "modern", discover }`, the SDK never sent `server/discover` and took
+ * `discover.capabilities` — a hard-coded `{ tools: {} }` — as the server's
+ * capabilities (SDK 2.3.1, `dist/index.mjs:3471-3479`). Everything derived from
+ * `getServerCapabilities()` was therefore blind: the Tasks extension this fleet
+ * declares could never be observed as advertised by any server, and any future
+ * capability-gated feature would silently do nothing on a pinned-modern server.
+ *
+ * Probing gives the SDK the server's real DiscoverResult while keeping the pin's
+ * semantics — no modern overlap still fails loudly rather than falling back.
+ */
+function versionNegotiationForEra(era: McpProtocolEra): { versionNegotiation?: VersionNegotiationOptions } {
+  if (era === "auto") {
+    return { versionNegotiation: { mode: "auto" as const } };
+  }
+  if (era === "2026-07-28") {
+    return { versionNegotiation: { mode: { pin: MODERN_PROTOCOL_VERSION } } };
+  }
+  return {};
+}
