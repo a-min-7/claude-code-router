@@ -27,6 +27,9 @@ const PROTOCOL = "2026-07-28";
 const TOOL_NAME = "perplexity_research";
 const TASK_ID = "task-from-the-fixture";
 const ANSWER = "BACKGROUND ANSWER";
+/** A task-level failure must surface the server's own code, not a generic one. */
+const TASK_FAILURE_CODE = -32011;
+const TASK_FAILURE_MESSAGE = "the upstream job failed";
 
 /** rmcp's own SEP-2243 table: which param `Mcp-Name` is sourced from. */
 function nameSource(method) {
@@ -65,6 +68,7 @@ async function startFixture({
 } = {}) {
   const requests = [];
   const violations = [];
+  let legacy = false;
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -79,15 +83,27 @@ async function startFixture({
       }
       requests.push({ method: body.method, mcpMethod: req.headers["mcp-method"], mcpName: req.headers["mcp-name"] });
 
-      // Enforce the stateless contract exactly as the real server does.
-      const problems = [];
-      if (req.headers["mcp-protocol-version"] !== PROTOCOL) problems.push("MCP-Protocol-Version");
-      if (!req.headers["mcp-method"]) problems.push("Mcp-Method");
+      // ⚠️ The stateless contract applies to the MODERN surface only. `initialize`
+      // is the legacy handshake and carries no `_meta` and no `Mcp-Method`; once
+      // one is seen this connection is legacy-shaped for the rest of its life.
+      // Modelling that matters: enforcing the modern envelope unconditionally
+      // would 400 every legacy session and make the legacy guard below pass for
+      // the wrong reason. The real fleet server behaves this way too (it answers
+      // both a bare `initialize` and a modern stateless request).
       const meta = body?.params?._meta;
-      if (!meta || meta["io.modelcontextprotocol/protocolVersion"] !== PROTOCOL) problems.push("params._meta");
-      const key = nameSource(body.method);
-      if (key !== undefined && typeof body?.params?.[key] === "string" && req.headers["mcp-name"] !== body.params[key]) {
-        problems.push(`Mcp-Name(${key})`);
+      const legacyShaped = legacy || body.method === "initialize";
+      if (body.method === "initialize") {
+        legacy = true;
+      }
+      const problems = [];
+      if (!legacyShaped) {
+        if (req.headers["mcp-protocol-version"] !== PROTOCOL) problems.push("MCP-Protocol-Version");
+        if (!req.headers["mcp-method"]) problems.push("Mcp-Method");
+        if (!meta || meta["io.modelcontextprotocol/protocolVersion"] !== PROTOCOL) problems.push("params._meta");
+        const key = nameSource(body.method);
+        if (key !== undefined && typeof body?.params?.[key] === "string" && req.headers["mcp-name"] !== body.params[key]) {
+          problems.push(`Mcp-Name(${key})`);
+        }
       }
       if (problems.length) {
         violations.push({ method: body.method, problems });
@@ -117,6 +133,15 @@ async function startFixture({
             resultType: "complete",
             supportedVersions: [PROTOCOL],
             capabilities: { tools: {}, ...(advertiseTasks ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) }
+          });
+          return;
+        case "initialize":
+          // The legacy handshake. `serverInfo` is required on a legacy
+          // InitializeResult — the SDK's wire schema rejects the result without it.
+          reply({
+            protocolVersion: "2024-11-05",
+            capabilities: { tools: {}, ...(advertiseTasks ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) },
+            serverInfo: { name: "fixture", version: "1.0.0" }
           });
           return;
         case "tools/list":
@@ -155,6 +180,20 @@ async function startFixture({
             });
             return;
           }
+          if (taskStatus === "failed") {
+            // SEP-2663: a terminal `failed` task carries the JSON-RPC error that
+            // caused it, in the same shape the original request would have thrown.
+            reply({
+              resultType: "complete",
+              taskId: TASK_ID,
+              status: "failed",
+              createdAt: now,
+              lastUpdatedAt: now,
+              ttlMs,
+              error: { code: TASK_FAILURE_CODE, message: TASK_FAILURE_MESSAGE }
+            });
+            return;
+          }
           reply({ resultType: "complete", taskId: TASK_ID, status: "working", createdAt: now, lastUpdatedAt: now, ttlMs });
           return;
         case "tasks/cancel":
@@ -173,6 +212,7 @@ async function startFixture({
     requests,
     violations,
     countOf: (method) => requests.filter((entry) => entry.method === method).length,
+    methodsSeen: () => requests.map((entry) => entry.method),
     close: () => new Promise((resolve) => server.close(resolve))
   };
 }
@@ -239,6 +279,31 @@ test("a task-returning server yields the task's final result, not a failure", as
   }
 });
 
+test("a failed task surfaces the server's own JSON-RPC error, not a generic one", async () => {
+  const fixture = await startFixture({ toolBehaviour: "task", taskStatus: "failed" });
+  try {
+    await assert.rejects(
+      () =>
+        withAdapter(makeServerConfig({ url: fixture.url }), (adapter) => adapter.callTool(TOOL_NAME, { input: "q" })),
+      (error) => {
+        assert.equal(
+          error?.code,
+          TASK_FAILURE_CODE,
+          `the server's code must survive the mapping, got ${error?.code}: ${error?.message}`
+        );
+        assert.ok(
+          String(error?.message).includes(TASK_FAILURE_MESSAGE),
+          `the server's message must survive too, got: ${error?.message}`
+        );
+        return true;
+      }
+    );
+    assert.ok(fixture.countOf("tasks/get") >= 1, "it must have polled to learn the task failed");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("a server that never returns a task keeps the plain path — and is never polled", async () => {
   // Advertises the extension (so a runtime IS attached) but answers normally.
   const fixture = await startFixture({ advertiseTasks: true, toolBehaviour: "plain" });
@@ -263,6 +328,29 @@ test("a server that does not advertise the extension gets no task runtime at all
     assert.deepEqual(fixture.violations, []);
     assert.equal(result.content[0].text, "PLAIN ANSWER");
     assert.equal(fixture.countOf("tasks/get"), 0, "nothing may be polled for a non-advertising server");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a legacy-era server gets no task runtime, even when it declares the extension", async () => {
+  // ⚠️ This is a regression guard, not a pre-fix discriminator: the plain path is
+  // untouched by this work, so it passes before and after. What it pins is the
+  // *era* half of the gate — a legacy connection must not grow a runtime even
+  // though its `initialize` advertises the extension, so a legacy `tools/call`
+  // can never be routed through the poll loop. (`toolBehaviour: "plain"` because
+  // a legacy server has no task vocabulary: the 2025-11-25 path needs a
+  // `capabilities.tasks` declaration and per-tool `taskSupport`, which we never
+  // supply.)
+  const fixture = await startFixture({ advertiseTasks: true, toolBehaviour: "plain" });
+  try {
+    const result = await withAdapter(makeServerConfig({ url: fixture.url, protocolEra: "legacy" }), (adapter) =>
+      adapter.callTool(TOOL_NAME, { input: "q" })
+    );
+    assert.equal(result.content[0].text, "PLAIN ANSWER");
+    assert.equal(fixture.countOf("tasks/get"), 0, "a legacy connection must never poll");
+    assert.ok(fixture.methodsSeen().includes("initialize"), "it must have taken the legacy handshake");
+    assert.equal(fixture.countOf("server/discover"), 0, "and must not have probed");
   } finally {
     await fixture.close();
   }
