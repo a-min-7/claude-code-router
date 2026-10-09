@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,7 +19,32 @@ const excludedSettingKeys = new Set([
 
 const generatedBy = "scripts/generate-claude-code-config-options.mjs";
 
-async function main() {
+// A fetch that FAILS throws, and main() below already handles that by reusing the
+// previous metadata. The dangerous case is the opposite one: a fetch that SUCCEEDS and
+// returns markdown the parsers no longer recognise. That produces an empty (or truncated)
+// catalog with no error at all, and writeJsonIfChanged then persists it over the tracked
+// file — one `git add -A` from a public fork. Measured 2026-10-09: demoting the per-variable
+// heading from `### ` to `## ` takes env from 363 to 0 silently, and replacing a section's
+// prose with a table silently drops entries one at a time.
+//
+// So: refuse to overwrite a populated catalog with an empty one.
+export function catalogGuardViolations(generated, previous) {
+  const violations = [];
+  for (const section of ["settings", "env"]) {
+    const now = Array.isArray(generated?.[section]) ? generated[section].length : 0;
+    const before = Array.isArray(previous?.[section]) ? previous[section].length : 0;
+    if (now === 0 && before > 0) {
+      violations.push(`${section}: parsed ${before} -> 0 (parser drift, not a docs change)`);
+    } else if (before > 0 && now < before) {
+      // Partial drift does not zero the list, it shrinks it — quieter, so it is logged
+      // every time rather than only when it crosses zero.
+      console.warn(`[claude-config] WARNING: ${section} shrank ${before} -> ${now}; writing anyway.`);
+    }
+  }
+  return violations;
+}
+
+export async function main() {
   let previous;
   try {
     previous = JSON.parse(readFileSync(outputFile, "utf8"));
@@ -27,21 +52,20 @@ async function main() {
     previous = undefined;
   }
 
+  let generated;
   try {
     const docs = await fetchDocs(sources);
     const settingsEn = parseSettingsReference(docs.settingsEn, "en");
     const settingsZh = parseSettingsReference(docs.settingsZh, "zh");
     const envEn = parseEnvReference(docs.envEn);
     const envZh = parseEnvReference(docs.envZh);
-    const generated = {
+    generated = {
       generatedAt: new Date().toISOString(),
       generatedBy,
       sourceUrls: sources,
       settings: mergeLocalizedSettings(settingsEn, settingsZh),
       env: mergeLocalizedEnv(envEn, envZh)
     };
-    writeJsonIfChanged(outputFile, generated, previous);
-    console.log(`[claude-config] Generated ${generated.settings.length} settings and ${generated.env.length} environment variables from official Claude Code docs.`);
   } catch (error) {
     if (previous?.settings?.length || previous?.env?.length) {
       console.warn(`[claude-config] Failed to refresh official Claude Code docs; reusing existing metadata. ${formatError(error)}`);
@@ -49,6 +73,20 @@ async function main() {
     }
     throw error;
   }
+
+  // Deliberately OUTSIDE the try above: the catch there reuses the previous metadata and
+  // returns successfully, which would silently downgrade a real guard failure into a warning.
+  const violations = catalogGuardViolations(generated, previous);
+  if (violations.length > 0) {
+    throw new Error(
+      `claude-config catalog guard tripped — refusing to overwrite ${outputFile}:\n  ${violations.join("\n  ")}\n` +
+      `  The official docs at ${sources.envEn} likely changed shape. Fix the parser in this\n` +
+      `  script, or delete the file to regenerate it from scratch deliberately.`
+    );
+  }
+
+  writeJsonIfChanged(outputFile, generated, previous);
+  console.log(`[claude-config] Generated ${generated.settings.length} settings and ${generated.env.length} environment variables from official Claude Code docs.`);
 }
 
 async function fetchDocs(urls) {
@@ -67,7 +105,7 @@ async function fetchDocs(urls) {
   return Object.fromEntries(entries);
 }
 
-function parseSettingsReference(markdown, locale) {
+export function parseSettingsReference(markdown, locale) {
   const globalConfigIndex = markdown.indexOf("\n## Global config settings");
   const scopedMarkdown = globalConfigIndex > 0 ? markdown.slice(0, globalConfigIndex) : markdown;
   const sections = markdownSections(scopedMarkdown, /^### `([^`]+)`/gm);
@@ -102,7 +140,7 @@ function settingFromSection(section, locale) {
   };
 }
 
-function parseEnvReference(markdown) {
+export function parseEnvReference(markdown) {
   const variablesIndex = markdown.indexOf("\n## Variables");
   const scopedMarkdown = variablesIndex > 0 ? markdown.slice(variablesIndex) : markdown;
   const sections = markdownSections(scopedMarkdown, /^### `([^`]+)`/gm);
@@ -211,7 +249,7 @@ function mergeLocalizedSettings(enOptions, zhOptions) {
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
-function mergeLocalizedEnv(enOptions, zhOptions) {
+export function mergeLocalizedEnv(enOptions, zhOptions) {
   const zhByKey = new Map(zhOptions.map((item) => [item.key, item]));
   return uniqueByKey(enOptions)
     .map((option) => {
@@ -640,4 +678,24 @@ function formatError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-await main();
+// Run only when executed directly. build/build.mjs imports this module and calls main()
+// itself, so the side effect must not depend on import order — and a test must be able to
+// import the parsers without firing a network fetch.
+// ⚠️ Both sides go through realpathSync. Node resolves import.meta.url through the real
+// path but leaves process.argv[1] as given, so on macOS a script run from anywhere under
+// /var (e.g. $TMPDIR) compares "/var/..." against "/private/var/..." and the check is
+// silently FALSE — main() never runs and the process still exits 0. Measured 2026-10-09.
+function isDirectRun() {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  await main();
+}
