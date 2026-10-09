@@ -341,8 +341,14 @@ function splitMarkdownTableRow(line) {
   return cells;
 }
 
+// ⚠️ The dash run is `-+`, not `-{3,}`. GFM requires only ONE dash per delimiter cell; the
+// three-dash form is a convention, not the grammar. On 2026-10-09 the env-vars page switched
+// its separator from `| --- | --- |` to `| :- | :- |`, which `-{3,}` rejects — so no table was
+// recognised, envFromTables returned [], and env went 363 -> 0 with no error at all. The
+// settings page kept `---`, so only env broke, which is what made it look like a parser bug
+// rather than a docs change.
 function isTableSeparator(line) {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+  return /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line);
 }
 
 function firstMetadataValue(markdown, label) {

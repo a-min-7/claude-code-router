@@ -97,10 +97,14 @@ test("guard: a healthy parse is not a violation", () => {
   assert.deepEqual(catalogGuardViolations(generated, previous), []);
 });
 
-test("refuses to overwrite a populated catalog with a drifted parse", () => {
-  // The behavioural case, run as a subprocess against generatorUnderTest so it can be pointed
-  // at a pre-change revision. A stubbed fetch returns drifted markdown for every source URL,
-  // and the temp catalog is seeded exactly as the real one would be.
+// Runs the generator under test as a SUBPROCESS in a throwaway tree, with a stubbed fetch (HTTP
+// 200, caller-supplied markdown) and a pre-seeded catalog, then reports what it did.
+//
+// Subprocess rather than import, so the same cases can be pointed at a pre-change revision via
+// CCR_GENERATOR_PATH. That is what makes the regressions below provably RED on old code instead
+// of merely asserted — and it is also the only way to run a revision that still ends in a bare
+// `await main();`, which would fire a real network fetch if imported.
+function runGeneratorInSandbox({ markdown, seedEnv, seedSettings = [] }) {
   const sandbox = mkdtempSync(path.join(tmpdir(), "ccr-catalog-guard-"));
   try {
     const scriptsDir = path.join(sandbox, "scripts");
@@ -112,38 +116,80 @@ test("refuses to overwrite a populated catalog with a drifted parse", () => {
     copyFileSync(generatorUnderTest, scriptCopy);
 
     const catalogPath = path.join(catalogDir, "claude-code-config-options.json");
-    const seeded = {
+    writeFileSync(catalogPath, JSON.stringify({
       generatedAt: "2026-01-01T00:00:00.000Z",
       generatedBy: "test",
       sourceUrls: {},
-      settings: [{ key: "s1" }, { key: "s2" }, { key: "s3" }],
-      env: [{ key: "E1" }, { key: "E2" }, { key: "E3" }]
-    };
-    writeFileSync(catalogPath, JSON.stringify(seeded, null, 2));
+      settings: seedSettings,
+      env: seedEnv
+    }, null, 2));
 
-    // Stub fetch for the child: succeeds (200) but returns the drifted markdown.
     const stub = path.join(sandbox, "stub-fetch.mjs");
-    writeFileSync(stub, `globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => ${JSON.stringify(driftedHeading)} });\n`);
+    writeFileSync(stub, `globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => ${JSON.stringify(markdown)} });\n`);
 
     const run = spawnSync(process.execPath, ["--import", pathToFileURL(stub).href, scriptCopy], {
       cwd: sandbox,
-      encoding: "utf8",
-      env: { ...process.env, CCR_GENERATOR_PATH: "" }
+      encoding: "utf8"
     });
 
-    const after = JSON.parse(readFileSync(catalogPath, "utf8"));
-
-    assert.deepEqual(
-      after.env.map((entry) => entry.key),
-      ["E1", "E2", "E3"],
-      "the seeded catalog was overwritten by a drifted parse"
-    );
-    assert.deepEqual(after.settings.map((entry) => entry.key), ["s1", "s2", "s3"]);
-    assert.notEqual(run.status, 0, `expected a non-zero exit; stderr: ${run.stderr}`);
-    assert.match(run.stderr, /guard tripped/);
+    return { status: run.status, stderr: run.stderr, catalog: JSON.parse(readFileSync(catalogPath, "utf8")) };
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
+}
+
+function envTable(separator) {
+  return [
+    "# Environment variables", "",
+    "## Variables", "",
+    "| Variable | Purpose |",
+    separator,
+    "| ANTHROPIC_API_KEY | API key sent as `X-Api-Key`. |",
+    "| ANTHROPIC_BASE_URL | Override the API endpoint. |",
+    ""
+  ].join("\n");
+}
+
+test("refuses to overwrite a populated catalog with a drifted parse", () => {
+  const { status, stderr, catalog } = runGeneratorInSandbox({
+    markdown: driftedHeading,
+    seedSettings: [{ key: "s1" }, { key: "s2" }, { key: "s3" }],
+    seedEnv: [{ key: "E1" }, { key: "E2" }, { key: "E3" }]
+  });
+
+  assert.deepEqual(
+    catalog.env.map((entry) => entry.key),
+    ["E1", "E2", "E3"],
+    "the seeded catalog was overwritten by a drifted parse"
+  );
+  assert.deepEqual(catalog.settings.map((entry) => entry.key), ["s1", "s2", "s3"]);
+  assert.notEqual(status, 0, `expected a non-zero exit; stderr: ${stderr}`);
+  assert.match(stderr, /guard tripped/);
+});
+
+test("parses a table whose delimiter cells use a single dash", () => {
+  // Regression pin for 2026-10-09. The live env-vars page switched its delimiter row from
+  // `| --- | --- |` to `| :- | :- |`. GFM needs only one dash per cell; the parser demanded
+  // three, so no table matched and env silently went 363 -> 0.
+  const { status, stderr, catalog } = runGeneratorInSandbox({
+    markdown: envTable("| :- | :- |"),
+    seedEnv: [{ key: "E1" }]
+  });
+
+  assert.ok(catalog.env.length > 0, `a minimal-dash table parsed to no env entries; stderr: ${stderr}`);
+  assert.equal(status, 0, `expected a clean exit; stderr: ${stderr}`);
+});
+
+test("still parses the three-dash delimiter style", () => {
+  // Control for the case above: it isolates the failure to the delimiter width rather than to
+  // "tables are broken", and it must stay green on every revision.
+  const { status, catalog } = runGeneratorInSandbox({
+    markdown: envTable("| --- | --- |"),
+    seedEnv: [{ key: "E1" }]
+  });
+
+  assert.ok(catalog.env.length > 0, "a three-dash table parsed to no env entries");
+  assert.equal(status, 0);
 });
 
 test("the shipped catalog is not degenerate", () => {
