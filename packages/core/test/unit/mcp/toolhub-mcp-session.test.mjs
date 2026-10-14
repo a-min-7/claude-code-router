@@ -4,7 +4,8 @@ import {
   isSessionExpiryHttpStatus,
   isSessionLossError,
   McpServerHttpError,
-  McpSseStreamClosedError
+  McpSseStreamClosedError,
+  toTypedTransportError
 } from "@ccr/core/mcp/toolhub-mcp-session.ts";
 
 test("isSessionExpiryHttpStatus treats 410 Gone as session loss", () => {
@@ -56,4 +57,68 @@ test("isSessionLossError does NOT recover from untagged or non-error values", ()
   assert.equal(isSessionLossError("Session not found"), false);
   assert.equal(isSessionLossError(undefined), false);
   assert.equal(isSessionLossError(null), false);
+});
+
+// ---------------------------------------------------------------------------
+// The conversion that makes the predicate above reachable in production.
+//
+// ⚠️ `isSessionLossError` types on errors THIS MODULE declares, and the SDK
+// throws none of them — `new McpServerHttpError(` had no call site anywhere, so
+// the recovery path was dead code for every HTTP MCP: a session the remote had
+// expired was replayed for the life of the resolver process. The shapes below
+// are the ones the transport actually raises, taken from the live failure
+// (`Error POSTing to endpoint: Not Found: Session not found` against rmcp).
+// ---------------------------------------------------------------------------
+
+test("toTypedTransportError re-tags the SDK's own error shapes", () => {
+  // @modelcontextprotocol/client raises an McpError carrying the HTTP status and
+  // the response text on `data` — the shape measured live against brave-mcp-rs.
+  const sdkError = Object.assign(new Error("Error POSTing to endpoint: Not Found: Session not found"), {
+    code: -32603,
+    data: { status: 404, statusText: "Not Found", text: "Not Found: Session not found" }
+  });
+  const converted = toTypedTransportError(sdkError);
+  assert.ok(converted instanceof McpServerHttpError, "the SDK error must be re-tagged");
+  assert.equal(converted.status, 404);
+  assert.equal(converted.body, "Not Found: Session not found");
+  assert.equal(isSessionLossError(converted), true);
+
+  // The other POST path in the same transport raises a plain Error with the
+  // status embedded in the message.
+  const plainError = new Error("Error POSTing to endpoint (HTTP 404): Not Found: Session not found");
+  const convertedPlain = toTypedTransportError(plainError);
+  assert.ok(convertedPlain instanceof McpServerHttpError);
+  assert.equal(convertedPlain.status, 404);
+  assert.equal(isSessionLossError(convertedPlain), true);
+});
+
+test("toTypedTransportError keeps the narrowness: no status means no re-tag", () => {
+  // Returned UNCHANGED, so the guard directly above still holds.
+  const bare = new Error("Session not found");
+  assert.equal(toTypedTransportError(bare), bare, "an untagged error must pass through untouched");
+  assert.equal(isSessionLossError(toTypedTransportError(bare)), false);
+  assert.equal(toTypedTransportError("Session not found"), "Session not found");
+  assert.equal(toTypedTransportError(undefined), undefined);
+});
+
+test("toTypedTransportError re-tags a NON-expiry 4xx without making it recoverable", () => {
+  // A dead session and a missing route are both 404s; only the body separates
+  // them. Re-initializing on the second would mask a real fault.
+  const missingRoute = Object.assign(new Error("Error POSTing to endpoint: Not Found"), {
+    data: { status: 404, text: "Not Found" }
+  });
+  assert.ok(toTypedTransportError(missingRoute) instanceof McpServerHttpError);
+  assert.equal(isSessionLossError(toTypedTransportError(missingRoute)), false);
+
+  const serverDown = Object.assign(new Error("Error POSTing to endpoint: boom"), {
+    data: { status: 500, text: "boom" }
+  });
+  assert.equal(isSessionLossError(toTypedTransportError(serverDown)), false);
+});
+
+test("toTypedTransportError leaves already-typed errors identical", () => {
+  const typed = new McpServerHttpError("x", 404, "Session not found");
+  assert.equal(toTypedTransportError(typed), typed);
+  const sse = new McpSseStreamClosedError("closed");
+  assert.equal(toTypedTransportError(sse), sse);
 });

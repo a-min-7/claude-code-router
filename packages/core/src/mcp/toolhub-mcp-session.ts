@@ -72,3 +72,72 @@ export function isSessionLossError(error: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * Re-tag a transport failure as {@link McpServerHttpError} when — and only
+ * when — it carries an HTTP status.
+ *
+ * ⚠️ Why this exists at all: the predicate above types on errors this module
+ * declares, but nothing in the SDK *throws* them. `HttpMcpSdkAdapter` calls
+ * `@modelcontextprotocol/client`, whose streamable-HTTP transport raises its own
+ * error type with the status and the response text on `data` (or a plain
+ * `Error(\`Error POSTing to endpoint (HTTP 404): …\`)`). So the recovery path in
+ * `toolhub-sdk-adapters.ts` never fired for HTTP servers: a session the remote
+ * had expired was replayed for the life of the resolver process — the "404 Not
+ * Found: Session not found" failure this module was written to fix. The typed
+ * errors were declared and tested but never produced.
+ *
+ * Deliberately conservative: an error with no HTTP status (a timeout, a bare
+ * `Error`, a non-Error) is returned UNCHANGED, so `isSessionLossError` keeps
+ * rejecting it — re-initializing a session on an unclassified failure would mask
+ * real faults and add latency.
+ */
+export function toTypedTransportError(error: unknown): unknown {
+  if (error instanceof McpServerHttpError || error instanceof McpSseStreamClosedError) {
+    return error;
+  }
+  if (!(error instanceof Error)) {
+    return error;
+  }
+  const status = readHttpStatus(error);
+  if (status === undefined) {
+    return error;
+  }
+  return new McpServerHttpError(error.message, status, readHttpBody(error));
+}
+
+/** HTTP status from an SDK transport error, however it chose to carry it. */
+function readHttpStatus(error: Error): number | undefined {
+  const direct = (error as { status?: unknown }).status;
+  if (typeof direct === "number" && Number.isInteger(direct)) {
+    return direct;
+  }
+  const data = (error as { data?: { status?: unknown } }).data;
+  if (data && typeof data.status === "number" && Number.isInteger(data.status)) {
+    return data.status;
+  }
+  const matched = /Error POSTing to endpoint \(HTTP (\d{3})\)/.exec(error.message);
+  return matched ? Number(matched[1]) : undefined;
+}
+
+/** Response body from an SDK transport error, falling back to its message. */
+function readHttpBody(error: Error): string {
+  const direct = (error as { body?: unknown }).body;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+  const data = (error as { data?: { text?: unknown; body?: unknown } }).data;
+  if (data) {
+    if (typeof data.text === "string" && data.text.length > 0) {
+      return data.text;
+    }
+    if (typeof data.body === "string" && data.body.length > 0) {
+      return data.body;
+    }
+  }
+  const matched = /Error POSTing to endpoint \(HTTP \d{3}\):\s*([\s\S]*)$/.exec(error.message);
+  if (matched && matched[1].length > 0) {
+    return matched[1];
+  }
+  return error.message;
+}

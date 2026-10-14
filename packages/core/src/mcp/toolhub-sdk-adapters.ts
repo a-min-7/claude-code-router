@@ -24,7 +24,7 @@ import { MODERN_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import { resolveProtocolEra, toolHubClientCapabilities } from "@ccr/core/mcp/protocol-era";
 import type { McpProtocolEra } from "@ccr/core/mcp/protocol-era";
 import { ProtocolEraCache } from "@ccr/core/mcp/protocol-probe";
-import { isSessionLossError } from "@ccr/core/mcp/toolhub-mcp-session";
+import { isSessionLossError, toTypedTransportError } from "@ccr/core/mcp/toolhub-mcp-session";
 import { attachToolHubTaskRuntime, type ToolHubTaskRuntime } from "@ccr/core/mcp/toolhub-tasks";
 import type {
   NormalizedRemoteServerConfig,
@@ -220,9 +220,14 @@ class SseMcpSdkAdapter implements McpClient {
   ): Promise<T> {
     try {
       return await operation();
-    } catch (error) {
-      if (!isSessionLossError(error) || !isReplayable()) {
-        throw error;
+    } catch (rawError) {
+      // ⚠️ Classify the CONVERTED error, rethrow the ORIGINAL. The SDK's
+      // transport error is not one of the typed errors this predicate tests for,
+      // so without the conversion a session the remote had expired never
+      // recovered — see `toTypedTransportError`. A caller still gets the
+      // transport's own error text, so nothing downstream reads differently.
+      if (!isSessionLossError(toTypedTransportError(rawError)) || !isReplayable()) {
+        throw rawError;
       }
     }
     if (!this.recovery) {
@@ -434,9 +439,14 @@ class HttpMcpSdkAdapter implements McpClient {
   ): Promise<T> {
     try {
       return await operation();
-    } catch (error) {
-      if (!isSessionLossError(error) || !isReplayable()) {
-        throw error;
+    } catch (rawError) {
+      // ⚠️ Classify the CONVERTED error, rethrow the ORIGINAL. The SDK's
+      // transport error is not one of the typed errors this predicate tests for,
+      // so without the conversion a session the remote had expired never
+      // recovered — see `toTypedTransportError`. A caller still gets the
+      // transport's own error text, so nothing downstream reads differently.
+      if (!isSessionLossError(toTypedTransportError(rawError)) || !isReplayable()) {
+        throw rawError;
       }
     }
     if (!this.recovery) {
