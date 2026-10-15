@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
 import { HttpMcpSdkAdapter } from "@ccr/core/mcp/toolhub-sdk-adapters.ts";
+import { HttpMcpClient } from "@ccr/core/mcp/toolhub-mcp-clients.ts";
 
 const TOOL_NAME = "brave_web_search";
 const TOOL_TEXT = "SEARCH RESULT";
@@ -38,6 +39,8 @@ async function startSessionFixture() {
   let issued = 0;
   /** Set for one request at a time to simulate a non-expiry HTTP failure. */
   let forcedFailure;
+  /** Every session, always unknown — models a server that never accepts one. */
+  let evictEverything = false;
 
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -62,7 +65,7 @@ async function startSessionFixture() {
         return;
       }
       // What an rmcp server answers once its idle TTL has evicted the session.
-      if (typeof sessionId === "string" && evicted.has(sessionId)) {
+      if (evictEverything || (typeof sessionId === "string" && evicted.has(sessionId))) {
         res.writeHead(404, { "content-type": "text/plain" });
         res.end("Not Found: Session not found");
         return;
@@ -109,6 +112,10 @@ async function startSessionFixture() {
           evicted.add(entry.sessionId);
         }
       }
+    },
+    /** Even a session issued a moment ago is unknown — the retry cannot save it. */
+    evictEverySession: () => {
+      evictEverything = true;
     },
     failNextWith: (status, body) => {
       forcedFailure = { status, body };
@@ -201,6 +208,73 @@ test("a 5xx does NOT re-initialize the session", async () => {
     assert.equal(fixture.initializeCount(), 1, "a server fault must not trigger a recovery");
   } finally {
     await adapter.close();
+    await fixture.close();
+  }
+});
+
+/**
+ * ⚠️ THE WRAPPER-LEVEL CONTROL (2026-10-15). Everything above drives the ADAPTER.
+ * `HttpMcpClient`/`SseMcpClient` used to carry a session-recovery layer of their
+ * own — one above the adapter's — and a test of the adapter cannot see it. Driving
+ * the REAL wrapper is the only way to show the wrapper is a pass-through, so this
+ * proves the wrapper's happy path recovers at all before the pin below asserts the
+ * count on its failure path.
+ */
+test("a call through the real wrapper recovers when the remote has evicted the session", async () => {
+  const fixture = await startSessionFixture();
+  const client = new HttpMcpClient(makeServerConfig({ url: fixture.url }), (value) => value.tools ?? []);
+  try {
+    await client.listTools();
+    fixture.evictAll(); // the idle TTL fires between the two calls
+
+    const result = await client.callTool(TOOL_NAME, { input: "q" });
+    assert.equal(result.content[0].text, TOOL_TEXT, "the retry must return the server's answer");
+    assert.equal(fixture.initializeCount(), 2, "exactly one re-initialize — the adapter's");
+  } finally {
+    await client.close();
+    await fixture.close();
+  }
+});
+
+/**
+ * ⚠️ THE PIN for the wrapper's deleted recovery (fork `fix/toolhub-wrapper-recovery-dead-code`).
+ *
+ * The wrapper's own `withSessionRecovery` tested `isSessionLossError(error)` on the
+ * RAW error — the same miswired predicate `f5f2229a` fixed one layer down, and just
+ * as unreachable, because both adapters rethrow the ORIGINAL transport error. It was
+ * DELETED rather than converted: the wrapper holds no session state of its own, only
+ * the adapter, which already rebuilds its transport AND its client — so a second
+ * layer could only add a third upstream attempt, with no backoff, plus a second owner
+ * of `initialized`.
+ *
+ * `initializeCount()` is what discriminates the two options, which is why the pin
+ * asserts a NUMBER rather than just "it rejects". Measured 2026-10-15 by temporarily
+ * reinstating the CONVERT variant: the count is **2** with the recovery deleted and
+ * **4** with it converted — the two layers do not compose additively. The wrapper's
+ * recovery rebuilds the ADAPTER, and the wrapper's own retry then runs through that
+ * fresh adapter, which recovers once more. So converting would have bought a cascade
+ * of four upstream initializes, none of them able to help, on a server that will never
+ * accept a session — a measurement, not an argument, for deleting it.
+ */
+test("a persistent eviction surfaces after exactly ONE recovery, not two", async () => {
+  const fixture = await startSessionFixture();
+  const client = new HttpMcpClient(makeServerConfig({ url: fixture.url }), (value) => value.tools ?? []);
+  try {
+    await client.listTools(); // a real session, established
+    fixture.evictEverySession(); // now no session is ever valid
+
+    await assert.rejects(
+      () => client.callTool(TOOL_NAME, { input: "q" }),
+      /Session not found/,
+      "a double failure must surface the transport's own error, not be swallowed by a retry"
+    );
+    assert.equal(
+      fixture.initializeCount(),
+      2,
+      "exactly one recovery, and it is the adapter's — converting the deleted wrapper recovery measures 4, not 2"
+    );
+  } finally {
+    await client.close();
     await fixture.close();
   }
 });

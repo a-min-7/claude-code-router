@@ -7,9 +7,6 @@ import OpenAI from "openai";
 import { LEGACY_PROTOCOL_VERSION } from "@ccr/core/mcp/protocol-era";
 import { isZaiForcedThinkingModel } from "@ccr/core/mcp/zai-forced-thinking-models";
 import {
-  isSessionLossError
-} from "@ccr/core/mcp/toolhub-mcp-session";
-import {
   buildExecutionPlanJs,
   buildLocalFallbackWorkflowSketch,
   buildSequentialExecutionPlanJs,
@@ -17,14 +14,10 @@ import {
   isBrowserAutomationTool,
   toIdentifier
 } from "@ccr/core/mcp/toolhub-plan";
-import {
-  SseMcpSdkAdapter,
-  HttpMcpSdkAdapter,
-  StdioMcpSdkAdapter
-} from "./toolhub-sdk-adapters";
+import { StdioMcpSdkAdapter } from "./toolhub-sdk-adapters";
+import { SseMcpClient, HttpMcpClient } from "./toolhub-mcp-clients";
 import {
   normalizeServerConfig,
-  type NormalizedRemoteServerConfig,
   type NormalizedServerConfig,
   type NormalizedStdioServerConfig
 } from "./toolhub-server-config";
@@ -66,7 +59,6 @@ type JsonRpcResponse =
 // `protocolVersion` / `protocolEra` seam open silently while every type check
 // passed (fixed 2026-10-08, fork 5d1b4663).
 type GatewayMcpServerConfig = NormalizedServerConfig;
-type GatewayMcpRemoteServerConfig = NormalizedRemoteServerConfig;
 type GatewayMcpStdioServerConfig = NormalizedStdioServerConfig;
 
 type ToolDefinition = {
@@ -636,8 +628,8 @@ class ToolHubRuntime {
     const client = server.transport === "stdio"
       ? new StdioMcpClient(server)
       : server.transport === "sse"
-        ? new SseMcpClient(server)
-        : new HttpMcpClient(server);
+        ? new SseMcpClient(server, normalizeToolList)
+        : new HttpMcpClient(server, normalizeToolList);
     this.clients.set(serverName, { client, configHash });
     return client;
   }
@@ -956,135 +948,11 @@ class ToolHubRegistry {
 
 runtime = new ToolHubRuntime();
 
-class SseMcpClient implements McpClient {
-  private sdkAdapter: SseMcpSdkAdapter | undefined;
-  private initialized = false;
-  private recovery: Promise<void> | undefined;
-
-  constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
-
-  async listTools(): Promise<ToolDefinition[]> {
-    return this.withSessionRecovery(async () => {
-      await this.ensureInitialized();
-      return this.sdkAdapter!.listTools();
-    });
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.withSessionRecovery(async () => {
-      await this.ensureInitialized();
-      return this.sdkAdapter!.callTool(name, args);
-    });
-  }
-
-  async close(): Promise<void> {
-    this.initialized = false;
-    this.sdkAdapter = undefined;
-  }
-
-  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      if (!isSessionLossError(error)) {
-        throw error;
-      }
-    }
-    if (!this.recovery) {
-      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
-        this.recovery = undefined;
-      });
-    }
-    await this.recovery;
-    return operation();
-  }
-
-  private async reinitializeAfterSessionLoss(): Promise<void> {
-    this.initialized = false;
-    this.sdkAdapter = undefined;
-    await this.ensureInitialized();
-  }
-
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-    if (!this.sdkAdapter) {
-      this.sdkAdapter = new SseMcpSdkAdapter(this.server, normalizeToolList);
-    }
-    await this.sdkAdapter.listTools(); // triggers lazy init
-    this.initialized = true;
-  }
-}
-
-class HttpMcpClient implements McpClient {
-  private sdkAdapter: HttpMcpSdkAdapter | undefined;
-  private initialized = false;
-  private recovery: Promise<void> | undefined;
-
-  constructor(private readonly server: GatewayMcpRemoteServerConfig) {}
-
-  async listTools(): Promise<ToolDefinition[]> {
-    return this.withSessionRecovery(async () => {
-      await this.ensureInitialized();
-      return this.sdkAdapter!.listTools();
-    });
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.withSessionRecovery(async () => {
-      await this.ensureInitialized();
-      return this.sdkAdapter!.callTool(name, args);
-    });
-  }
-
-  async close(): Promise<void> {
-    this.initialized = false;
-    this.sdkAdapter = undefined;
-  }
-
-  /**
-   * Run an operation, and on session loss (see toolhub-mcp-session.ts) discard
-   * the stale session id, mint a fresh one via a new initialize, and retry the
-   * operation exactly once. Concurrent callers that hit session loss share the
-   * single in-flight recovery. Timeouts and generic HTTP errors surface to the
-   * caller unchanged.
-   */
-  private async withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      if (!isSessionLossError(error)) {
-        throw error;
-      }
-    }
-    if (!this.recovery) {
-      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
-        this.recovery = undefined;
-      });
-    }
-    await this.recovery;
-    return operation();
-  }
-
-  private async reinitializeAfterSessionLoss(): Promise<void> {
-    this.initialized = false;
-    this.sdkAdapter = undefined;
-    await this.ensureInitialized();
-  }
-
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-    if (!this.sdkAdapter) {
-      this.sdkAdapter = new HttpMcpSdkAdapter(this.server, normalizeToolList);
-    }
-    await this.sdkAdapter.listTools(); // triggers lazy init
-    this.initialized = true;
-  }
-}
-
+// ⚠️ SseMcpClient / HttpMcpClient now live in ./toolhub-mcp-clients.ts. They had to
+// move OUT of this entry point -- importing this file from a test runs the resolver
+// (its stdin handlers and runtime are module-scope) -- so the session-recovery pin
+// can drive the real wrapper. That file also records why their wrapper-level
+// recovery was DELETED rather than converted.
 class StdioMcpClient implements McpClient {
   private sdkAdapter: StdioMcpSdkAdapter | undefined;
   private initialized = false;
