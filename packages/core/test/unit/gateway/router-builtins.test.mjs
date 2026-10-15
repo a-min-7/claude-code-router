@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ClaudeCodeRouterPlugin } from "@ccr/core/gateway/claude-code-router-plugin.ts";
+import {
+  ClaudeCodeRouterPlugin,
+  ccrSubagentThinkingPlaceholderForTest as ccrSubagentThinkingPlaceholder
+} from "@ccr/core/gateway/claude-code-router-plugin.ts";
 import { fetchUpstreamWithFallback } from "@ccr/core/gateway/upstream/executor.ts";
 import { RequestRouteTraceRecorder } from "@ccr/core/observability/route-trace.ts";
 import { profileApiKeyId } from "@ccr/core/profiles/api-key.ts";
@@ -3239,7 +3242,10 @@ test("built-in Claude Code subagent thinking tag ignores a literal placeholder s
     body: {
       messages: [],
       model: "claude-default",
-      system: "Use <CCR-SUBAGENT-THINKING>on|off|low|medium|high</CCR-SUBAGENT-THINKING> here."
+      // ⚠️ The placeholder is DERIVED from the plugin's value list, never spelled out here.
+      // Hardcoding it is what made this test fail for the wrong reason when `max` joined the
+      // list (003f8cbd): the behaviour under test was fine, the copy had gone stale.
+      system: `Use <CCR-SUBAGENT-THINKING>${ccrSubagentThinkingPlaceholder}</CCR-SUBAGENT-THINKING> here.`
     },
     headers: { "user-agent": "Claude Code" },
     method: "POST",
@@ -3929,7 +3935,7 @@ test("Z.ai anthropic: an unrecognised effort is dropped, not guessed", async () 
   assert.ok(!("reasoning_effort" in result.body));
 });
 
-// The tag's effort levels are on|off|low|medium|high — so `medium` reaches the anthropic branch
+// The tag's effort levels are on|off|low|medium|high|max — so `medium` reaches the anthropic branch
 // and would be written straight into output_config.effort. The clamp has to catch it, or a
 // delegate tagged medium 400s on this surface.
 test("Z.ai anthropic: a medium-tagged subagent is mapped to a legal level", async () => {

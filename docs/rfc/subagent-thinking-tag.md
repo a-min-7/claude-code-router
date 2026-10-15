@@ -26,8 +26,12 @@ effort) level per spawn, in prompt text, with the same mechanics as the existing
 <CCR-SUBAGENT-THINKING>off</CCR-SUBAGENT-THINKING>
 ```
 
-- **Value domain (closed set):** `on | off | low | medium | high` — trimmed, case-insensitive.
-  Anything else (including a literal placeholder or empty) → tag ignored, diagnostic emitted.
+- **Value domain (closed set):** `on | off | low | medium | high | max` — trimmed, case-insensitive.
+  Anything else — an empty value, or any unrecognised level → tag ignored, diagnostic emitted.
+  ⚠️ **The LITERAL PLACEHOLDER is the one exception: it is ignored SILENTLY, with no diagnostic**
+  (`resolveSubagentThinkingEffect` returns empty diagnostics when the value equals
+  `ccrSubagentThinkingPlaceholder`, and that placeholder is DERIVED from the value list, so it
+  moves whenever the list does). An empty value still emits `subagent-thinking-invalid`.
 - **Placement:** same surfaces as the model tag — system prompt (text or content block) or the
   first two user messages. First occurrence wins. Order relative to the model tag is irrelevant.
 - **Stripping:** the tag is removed from the prompt before forwarding, **even when the value is
@@ -92,7 +96,7 @@ No config-schema migration, no `config.sqlite` change, no UI change.
 ## 5. Open Design Decisions
 
 - **D1 (application site):** standalone post-decision pass (recommended, item 7) vs decision-carried rewrites only. Standalone pass is required for the thinking-only case either way; using it for the combined case too keeps one code path.
-- **D2 (value domain):** `on|off|low|medium|high` as specced. Fleet note: local OpenAI-compatible backends are binary, so `low/medium/high` collapse to `enable_thinking: true` in v1 — acceptable, lossy-but-honest.
+- **D2 (value domain):** `on|off|low|medium|high|max`. ⚠️ **`max` was added 2026-10-01 (`003f8cbd`), after the original spec**: three subagent spawns tagged `max` all went out at `"output_config":{"effort":"high"}` because `max` was out of vocabulary — Z.ai documents glm-5.3's levels as low/high/max and RECOMMENDS `max`, so the list had omitted the recommended level. `medium` is retained for backward compatibility although the vendor does not document it (the Z.ai forced-thinking clamp coerces it to `high`). Fleet note: local OpenAI-compatible backends are binary, so `low/medium/high` collapse to `enable_thinking: true` in v1 — acceptable, lossy-but-honest.
 - **D3 (injection, P1):** ship without touching the injected instructions (extraction is unconditional, so manual/script-written tags work immediately). Recommend yes for v1 = no injection.
 
 ## 6. Diagnostics & Observability

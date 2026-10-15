@@ -824,6 +824,16 @@ const ccrSubagentThinkingValueList = ["on", "off", "low", "medium", "high", "max
 type SubagentThinkingValue = typeof ccrSubagentThinkingValueList[number];
 const ccrSubagentThinkingPlaceholder = ccrSubagentThinkingValueList.join("|");
 const ccrSubagentThinkingValues = new Set<string>(ccrSubagentThinkingValueList);
+
+// ⚠️ EXPORTED FOR TESTS, and the reason is a defect that already happened once. The tag is
+// ignored SILENTLY only when its value is EXACTLY the placeholder, and the placeholder is
+// DERIVED from the list above — so it moved the moment `max` joined the list (003f8cbd).
+// The test that exercises "a literal placeholder is ignored silently" had hardcoded the old
+// string (`on|off|low|medium|high`), so it did not fail on the behaviour under test: it
+// failed because its COPY of a derived constant had gone stale, and reported it as
+// `subagent-thinking-invalid`. Deriving it here is the same rule this fleet applies to
+// credentials and helpers — one source of truth, because copies are exactly what drifts.
+export const ccrSubagentThinkingPlaceholderForTest = ccrSubagentThinkingPlaceholder;
 const claudeCodeBillingSystemHeaderPrefix = "x-anthropic-billing-header";
 const claudeCodeSubagentModelEnv = "CLAUDE_CODE_SUBAGENT_MODEL";
 const ccrSubagentToolModelInstruction =
