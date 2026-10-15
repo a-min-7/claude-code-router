@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import packageJson from "../../package.json";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -320,10 +321,17 @@ async function handleJsonRpcRequest(payload: unknown): Promise<JsonRpcResponse |
             tools: {}
           },
           protocolVersion,
+          // ⚠️ Single-sourced from the manifest, NOT a literal. This read `"1.0.0"` — a constant
+          // in a field that SHOULD identify the build, so it was identical before and after every
+          // deploy, upgrade and fork release. That is the shape brave-mcp-rs documents: a field
+          // that cannot change proves nothing, and one read as confirmation is worse than absent.
+          // `packageJson.version` is inlined by esbuild at build time, so the value survives being
+          // copied to ~/.claude-code-router/bin/ with no package.json beside it. Same idiom as
+          // grok-media-mcp.ts, network-capture-mcp.ts and context-archive.ts.
           serverInfo: {
             name: toolHubServerName,
             title: "CCR ToolHub",
-            version: "1.0.0"
+            version: packageJson.version
           }
         });
       case "ping":
