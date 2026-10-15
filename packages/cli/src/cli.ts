@@ -15,6 +15,10 @@ import { applyProfileConfig, applyProfileRuntimeConfig } from "@ccr/core/profile
 import { ensureProfileGateway, ProfileGatewayUnavailableError } from "@ccr/core/profiles/launch-service";
 import { buildProfileLaunchPlan, defaultProfileOpenSurface, findProfileForOpen, profileLaunchSpawnCommand, resolveProfileOpenSurface, shouldAutoStartProfileGateway } from "@ccr/core/profiles/launch-core";
 import { openSystemExternal, startWebManagementServer } from "@ccr/core/web/management-server";
+// The CLI's own version, read from its manifest rather than a literal, and inlined by esbuild
+// at build time — the SAME mechanism WS3 used for the resolver's `serverInfo.version`
+// (`packages/core/src/mcp/toolhub-mcp.ts`), so the two cannot drift from each other.
+import packageJson from "../package.json";
 import { assertAvailableGatewayModels, type AppConfig, type GatewayStatus, type ProfileConfig, type ProfileOpenResult, type ProfileOpenSurface } from "@ccr/core/contracts/app";
 
 installSocketTypeOfServiceCompat();
@@ -44,7 +48,14 @@ type StopCliOptions = {
   help: boolean;
 };
 
-type CliOptions = ProfileCliOptions | StopCliOptions | WebCliOptions;
+type VersionCliOptions = {
+  agentArgs: string[];
+  command: "version";
+  help: boolean;
+  profileRef: string;
+};
+
+type CliOptions = ProfileCliOptions | StopCliOptions | WebCliOptions | VersionCliOptions;
 
 type ServiceState = {
   host?: string;
@@ -72,6 +83,14 @@ const prepareProfileOnlyEnv = "CCR_CLI_PREPARE_PROFILE_ONLY";
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  // ⚠️ BEFORE the subcommand dispatch, and that ordering is the whole point: the CLI had no
+  // version flag, so `ccr --version` fell through to the profile branch and was read as a
+  // PROFILE NAME — measured, it answered `Profile "--version" was not found or is disabled.`
+  // A wrong answer is worse than no answer, because it looks like a real one.
+  if (options.command === "version") {
+    console.log(packageJson.version);
+    return;
+  }
   if (options.command === "start") {
     if (options.help) {
       printStartHelp(0);
@@ -232,6 +251,13 @@ async function main(): Promise<void> {
 }
 
 function parseArgs(args: string[]): CliOptions {
+  // Only the FLAGS, deliberately — not a `version` subcommand. `version` is currently a legal
+  // profile name and would be shadowed, so a profile called `version` would stop resolving.
+  // `-V` is the short form (mirroring `-h`); `-v` is left free, since it conventionally means
+  // `--verbose` and nothing here uses it yet.
+  if (args[0] === "--version" || args[0] === "-V") {
+    return { agentArgs: [], command: "version", help: false, profileRef: "" };
+  }
   if (args[0] === "start") {
     return parseWebArgs(args.slice(1), "start");
   }
@@ -573,6 +599,7 @@ function printHelp(exitCode: number): void {
     `  ${command} ui [--host <host>] [--port <port>] [--open|--no-open] [--gateway|--no-gateway]`,
     `  ${command} serve [--host <host>] [--port <port>] [--open|--no-open] [--gateway|--no-gateway]`,
     `  ${command} stop`,
+    `  ${command} --version`,
     `  ${command} <profile-name-or-id> [cli|app] [-- <agent args>]`,
     "",
     "Notes:",
