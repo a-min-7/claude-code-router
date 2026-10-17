@@ -1577,7 +1577,7 @@ function claudeCodeWrapperShellScript(
     ...envExports,
     ...claudeCodeFirstPartyProviderEnvKeys.map((key) => `unset ${key}`),
     ...shellEnvExports(claudeCodeRuntimeEnv(config, profile, settingsDir, auth.wifIdentityTokenFile)),
-    ...shellEnvExports(claudeCodeMcpConfigEnv(mcpConfigFile)),
+    ...shellMcpConfigEnvExports(mcpConfigFile),
     ...shellEnvExports(claudeCodeUtcTimezoneEnvOverride()),
     `: "\${CCR_PROFILE_SURFACE:=${surface}}"`,
     "export CCR_PROFILE_SURFACE",
@@ -1616,7 +1616,7 @@ function claudeCodeWrapperCmdScript(
     ...envExports,
     ...claudeCodeFirstPartyProviderEnvKeys.map((key) => cmdSetLine(key, "")),
     ...cmdEnvExports(claudeCodeRuntimeEnv(config, profile, settingsDir, auth.wifIdentityTokenFile)),
-    ...cmdEnvExports(claudeCodeMcpConfigEnv(mcpConfigFile)),
+    ...cmdMcpConfigEnvExports(mcpConfigFile),
     ...cmdEnvExports(claudeCodeUtcTimezoneEnvOverride()),
     `if not defined CCR_PROFILE_SURFACE ${cmdSetLine("CCR_PROFILE_SURFACE", surface)}`,
     ...botEnvExports,
@@ -2918,6 +2918,32 @@ function cmdBotGatewayEnvExports(config: AppConfig, profile: ProfileConfig): str
 
 function cmdEnvExports(env: Record<string, string>): string[] {
   return Object.entries(env).map(([key, value]) => cmdSetLine(key, value));
+}
+
+/**
+ * Generate conditional shell exports for the MCP config env vars.
+ * Only emits lines when the file path is non-empty — avoids writing
+ * a hardcoded path to the wrapper when the file never existed on that
+ * host (e.g. ToolHub disabled).
+ */
+function shellMcpConfigEnvExports(configFile: string | undefined): string[] {
+  if (!configFile) return [];
+  return [
+    `if [ -f "${configFile}" ]; then export ${CLAUDE_CODE_MCP_CONFIG_ENV}=${shellQuote(configFile)}; fi`,
+    `if [ -f "${configFile}" ]; then export ${CODEXL_CLAUDE_CODE_MCP_CONFIG_ENV}=${shellQuote(configFile)}; fi`
+  ];
+}
+
+/**
+ * Generate conditional Windows batch exports for the MCP config env vars.
+ * Only emits lines when the file path is non-empty.
+ */
+function cmdMcpConfigEnvExports(configFile: string | undefined): string[] {
+  if (!configFile) return [];
+  return [
+    `if exist "${configFile}" ${cmdSetLine(CLAUDE_CODE_MCP_CONFIG_ENV, configFile)}`,
+    `if exist "${configFile}" ${cmdSetLine(CODEXL_CLAUDE_CODE_MCP_CONFIG_ENV, configFile)}`
+  ];
 }
 
 function withoutBotGatewayEnv(values: Record<string, string>): Record<string, string> {
