@@ -24,6 +24,25 @@ before(async () => {
   configApi = await import("@ccr/core/config/config.ts");
 });
 
+// ⚠️ THE GUARD, and it runs FIRST because it is the property the two tests below rely on.
+// The env block at the top of this file is a SETUP, and a setup regresses silently the
+// moment someone hoists an import or moves the assignment below it. This asserts the
+// OUTCOME instead: whatever the app resolves as its config directory must sit inside the
+// temp root this file owns.
+//
+// Resolution only — it reads the path and writes nothing — so it is safe under any HOME,
+// which is what makes it usable as the RED half of its own control: with the env block
+// removed it resolves the live store and fails, without ever touching it.
+test("the config store resolves inside this test's own temp dir, never the live one", async () => {
+  const { resolveRuntimeConfigDir } = await import("@ccr/core/runtime/app-paths.ts");
+  const configDir = path.resolve(resolveRuntimeConfigDir());
+  const owned = path.resolve(root) + path.sep;
+  assert.ok(
+    configDir.startsWith(owned),
+    `config dir resolved OUTSIDE this test's temp root — the suite would write production state.\n  resolved: ${configDir}\n  owned   : ${owned}`
+  );
+});
+
 test("theme preference persistence changes only the theme field", async () => {
   const current = await configApi.loadAppConfig();
   const markerHost = "theme-preference.test";
