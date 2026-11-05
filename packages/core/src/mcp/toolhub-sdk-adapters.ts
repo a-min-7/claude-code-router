@@ -61,6 +61,43 @@ type GatewayMcpStdioServerConfig = NormalizedStdioServerConfig;
 
 const TOOLHUB_NAME = "ccr-toolhub";
 
+/**
+ * A stable fingerprint of what the server currently claims in its `extensions`
+ * map — the same field `serverAdvertisesTasks` reads (issue #31).
+ *
+ * The task runtime used to be resolved once per *client instance*, so a backend
+ * that connected while it did not advertise kept that answer for the life of the
+ * connection: measured 2026-11-05, four toolhubs returned `Unsupported result
+ * type 'task'` for a server that had started advertising, and only replacing the
+ * process cleared it. Keying the negative cache on the claim as well as the
+ * client costs one local accessor read per tool call and re-probes when the
+ * claim changes.
+ *
+ * Never throws: a capability read that fails reads as "unchanged", which
+ * degrades to the previous behaviour rather than breaking the plain path.
+ */
+function taskRuntimeCapabilityFingerprint(client: SdkClient): string {
+  try {
+    return JSON.stringify(client.getServerCapabilities()?.extensions ?? null);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Whether a `tools/call` rejection is the SDK refusing a result it cannot decode
+ * because the server answered with a task handle (issue #31).
+ *
+ * Matched on the message rather than a code because the rejection comes from the
+ * SDK's result decoder, not from an error we construct. Kept narrow — "task" AND
+ * "Unsupported result type" — so an unrelated failure is never mistaken for the
+ * one case a retry can repair.
+ */
+function isUnsupportedResultTypeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unsupported result type/i.test(message) && /task/i.test(message);
+}
+
 // ─── SSE adapter ────────────────────────────────────────────────────
 /**
  * Wraps the SDK's SSEClientTransport. The SDK (2.3.1) deprecates this
@@ -82,6 +119,8 @@ class SseMcpSdkAdapter implements McpClient {
   private taskRuntime: ToolHubTaskRuntime | undefined;
   /** The client the runtime above is attached to; a new client invalidates it. */
   private taskRuntimeClient: SdkClient | undefined;
+  /** The advertised capabilities seen when that runtime was resolved (issue #31). */
+  private taskRuntimeCapabilities: string | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -115,7 +154,33 @@ class SseMcpSdkAdapter implements McpClient {
       // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
       // used it as the default for every request. Measured 2026-10-09: a 65 s tool call
       // was rejected at 60.0 s against a server configured for 120 s.
-      const result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
+      let result;
+      try {
+        result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
+      } catch (error) {
+        if (!isUnsupportedResultTypeError(error)) {
+          throw error;
+        }
+        // ⚠️ Issue #31. The server answered `tools/call` with a task while this
+        // connection carried no runtime. The declared capabilities are captured
+        // at `initialize` and never refresh on a live connection, so this
+        // failure is the only reliable signal that the server now offers tasks:
+        // drop the cached answer, resolve again, and retry ONCE through the
+        // runtime. If the retry cannot attach, the original error surfaces.
+        this.taskRuntimeClient = undefined;
+        this.taskRuntimeCapabilities = undefined;
+        // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
+        // the capabilities the client captured at `initialize`, and those are
+        // just as stale as the cache. Rebuild the connection so the handshake
+        // re-reads what the server actually offers, then attach against that.
+        await this.reinitializeAfterSessionLoss();
+        const retryRuntime = await this.resolveTaskRuntime();
+        if (!retryRuntime) {
+          throw error;
+        }
+        taskBacked = true;
+        return retryRuntime.execute(name, args, this.server.requestTimeoutMs);
+      }
       if ((result as Record<string, unknown>).isError === true) {
         const isErrorResult = result as Record<string, unknown>;
         throw new Error(
@@ -257,17 +322,20 @@ class SseMcpSdkAdapter implements McpClient {
    * extension, and a failure to attach must never break the plain path: tasks
    * are an enhancement, so this swallows its own errors by design.
    */
-  private async resolveTaskRuntime(): Promise<void> {
+  private async resolveTaskRuntime(): Promise<ToolHubTaskRuntime | undefined> {
     const client = this.sdkClient;
     const transport = this.sdkTransport;
-    if (client === undefined || transport === undefined || this.taskRuntimeClient === client) {
+    if (client === undefined || transport === undefined) {
+      return;
+    }
+    const capabilities = taskRuntimeCapabilityFingerprint(client);
+    if (this.taskRuntimeClient === client && this.taskRuntimeCapabilities === capabilities) {
       return;
     }
     await this.taskRuntime?.close().catch(() => undefined);
     this.taskRuntime = undefined;
-    this.taskRuntimeClient = client;
     try {
-      this.taskRuntime = await attachToolHubTaskRuntime({
+      const runtime = await attachToolHubTaskRuntime({
         client,
         transport,
         server: { name: this.server.name, url: this.server.url },
@@ -275,9 +343,22 @@ class SseMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
+      // ⚠️ Issue #31: the markers move to AFTER the attempt answers. Set before
+      // the `await`, a *thrown* attach retired this client for the life of the
+      // connection — the guard above returned on every later call, and the plain
+      // path then answered `Unsupported result type 'task'` for a server that
+      // had since started advertising. `taskRuntimeClient` now names a client the
+      // runtime is really attached to, which is what its comment always claimed.
+      this.taskRuntime = runtime;
+      this.taskRuntimeClient = client;
+      this.taskRuntimeCapabilities = capabilities;
     } catch {
+      // Markers deliberately left unset so the next call retries. The swallow
+      // itself is intended: tasks are an enhancement and must never break the
+      // plain path.
       this.taskRuntime = undefined;
     }
+    return this.taskRuntime;
   }
 }
 
@@ -294,6 +375,8 @@ class HttpMcpSdkAdapter implements McpClient {
   private taskRuntime: ToolHubTaskRuntime | undefined;
   /** The client the runtime above is attached to; a new client invalidates it. */
   private taskRuntimeClient: SdkClient | undefined;
+  /** The advertised capabilities seen when that runtime was resolved (issue #31). */
+  private taskRuntimeCapabilities: string | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -327,7 +410,33 @@ class HttpMcpSdkAdapter implements McpClient {
       // `requestTimeoutMs` the config surface carries — the pre-SDK hand-rolled client
       // used it as the default for every request. Measured 2026-10-09: a 65 s tool call
       // was rejected at 60.0 s against a server configured for 120 s.
-      const result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
+      let result;
+      try {
+        result = await this.sdkClient!.callTool({ name, arguments: args }, { timeout: this.server.requestTimeoutMs });
+      } catch (error) {
+        if (!isUnsupportedResultTypeError(error)) {
+          throw error;
+        }
+        // ⚠️ Issue #31. The server answered `tools/call` with a task while this
+        // connection carried no runtime. The declared capabilities are captured
+        // at `initialize` and never refresh on a live connection, so this
+        // failure is the only reliable signal that the server now offers tasks:
+        // drop the cached answer, resolve again, and retry ONCE through the
+        // runtime. If the retry cannot attach, the original error surfaces.
+        this.taskRuntimeClient = undefined;
+        this.taskRuntimeCapabilities = undefined;
+        // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
+        // the capabilities the client captured at `initialize`, and those are
+        // just as stale as the cache. Rebuild the connection so the handshake
+        // re-reads what the server actually offers, then attach against that.
+        await this.reinitializeAfterSessionLoss();
+        const retryRuntime = await this.resolveTaskRuntime();
+        if (!retryRuntime) {
+          throw error;
+        }
+        taskBacked = true;
+        return retryRuntime.execute(name, args, this.server.requestTimeoutMs);
+      }
       if ((result as Record<string, unknown>).isError === true) {
         const isErrorResult = result as Record<string, unknown>;
         throw new Error(
@@ -467,17 +576,20 @@ class HttpMcpSdkAdapter implements McpClient {
   }
 
   /** See the note on the SSE adapter's resolveTaskRuntime. */
-  private async resolveTaskRuntime(): Promise<void> {
+  private async resolveTaskRuntime(): Promise<ToolHubTaskRuntime | undefined> {
     const client = this.sdkClient;
     const transport = this.sdkTransport;
-    if (client === undefined || transport === undefined || this.taskRuntimeClient === client) {
+    if (client === undefined || transport === undefined) {
+      return;
+    }
+    const capabilities = taskRuntimeCapabilityFingerprint(client);
+    if (this.taskRuntimeClient === client && this.taskRuntimeCapabilities === capabilities) {
       return;
     }
     await this.taskRuntime?.close().catch(() => undefined);
     this.taskRuntime = undefined;
-    this.taskRuntimeClient = client;
     try {
-      this.taskRuntime = await attachToolHubTaskRuntime({
+      const runtime = await attachToolHubTaskRuntime({
         client,
         transport,
         server: { name: this.server.name, url: this.server.url },
@@ -485,9 +597,22 @@ class HttpMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
+      // ⚠️ Issue #31: the markers move to AFTER the attempt answers. Set before
+      // the `await`, a *thrown* attach retired this client for the life of the
+      // connection — the guard above returned on every later call, and the plain
+      // path then answered `Unsupported result type 'task'` for a server that
+      // had since started advertising. `taskRuntimeClient` now names a client the
+      // runtime is really attached to, which is what its comment always claimed.
+      this.taskRuntime = runtime;
+      this.taskRuntimeClient = client;
+      this.taskRuntimeCapabilities = capabilities;
     } catch {
+      // Markers deliberately left unset so the next call retries. The swallow
+      // itself is intended: tasks are an enhancement and must never break the
+      // plain path.
       this.taskRuntime = undefined;
     }
+    return this.taskRuntime;
   }
 }
 
