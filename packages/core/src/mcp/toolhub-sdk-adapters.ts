@@ -190,17 +190,21 @@ class SseMcpSdkAdapter implements McpClient {
           // leaks a connection for no benefit, so surface the original error.
           throw error;
         }
-        this.taskRuntimeClient = undefined;
-        this.taskRuntimeCapabilities = undefined;
-        // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
-        // the capabilities the client captured at `initialize`, and those are just
-        // as stale as the cache. Rebuild the connection so the handshake re-reads
-        // what the server actually offers, then attach against that. The discarded
-        // client is CLOSED first — it is live, not dead, so leaving it open would
-        // leak a connection per recovery.
-        await this.sdkClient?.close().catch(() => undefined);
+        // ⚠️ ONE recovery at a time (issue #33). `recoverSession(true)` closes the
+        // discarded client, and that close settles every in-flight request on it
+        // with `ConnectionClosed`; a second caller that passed this gate while the
+        // first was rebuilding used to close the FIRST caller's freshly built
+        // client. Sharing one single-flight rebuild makes the second caller await
+        // the first instead.
+        //
+        // ⚠️ Clearing the markers is not enough on its own: `attachToolHubTaskRuntime`
+        // reads the capabilities the client captured at `initialize`, and those are
+        // just as stale as the cache. Rebuild the connection so the handshake
+        // re-reads what the server actually offers, then attach against that. The
+        // discarded client is CLOSED first — it is live, not dead, so leaving it
+        // open would leak a connection per recovery.
         try {
-          await this.reinitializeAfterSessionLoss();
+          await this.recoverSession(true);
         } catch (reconnectFailure) {
           // The caller needs the error that actually describes the call, not the
           // reconnect's. Preserve the original and attach the failure as `cause`.
@@ -333,13 +337,36 @@ class SseMcpSdkAdapter implements McpClient {
         throw rawError;
       }
     }
-    if (!this.recovery) {
-      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
+    await this.recoverSession(false);
+    return operation();
+  }
+
+  /**
+   * Rebuild the connection ONCE however many callers need it (issue #33).
+   *
+   * `closeDiscardedClient` closes the client being replaced — and only the caller
+   * that STARTS the recovery decides, so a joiner never closes the rebuild it
+   * joined. A task-runtime recovery asks for the close because its discarded
+   * client is still live and would otherwise leak a connection; a session-loss
+   * replay does not, because the transport it is replacing is already gone.
+   */
+  private recoverSession(closeDiscardedClient: boolean): Promise<void> {
+    if (this.recovery === undefined) {
+      this.recovery = (async () => {
+        if (closeDiscardedClient) {
+          // The task runtime names the client being discarded, so retire the
+          // markers in the same critical section that replaces it.
+          this.taskRuntimeClient = undefined;
+          this.taskRuntimeCapabilities = undefined;
+          const discarded = this.sdkClient;
+          await discarded?.close().catch(() => undefined);
+        }
+        await this.reinitializeAfterSessionLoss();
+      })().finally(() => {
         this.recovery = undefined;
       });
     }
-    await this.recovery;
-    return operation();
+    return this.recovery;
   }
 
   private async reinitializeAfterSessionLoss(): Promise<void> {
@@ -489,17 +516,21 @@ class HttpMcpSdkAdapter implements McpClient {
           // leaks a connection for no benefit, so surface the original error.
           throw error;
         }
-        this.taskRuntimeClient = undefined;
-        this.taskRuntimeCapabilities = undefined;
-        // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
-        // the capabilities the client captured at `initialize`, and those are just
-        // as stale as the cache. Rebuild the connection so the handshake re-reads
-        // what the server actually offers, then attach against that. The discarded
-        // client is CLOSED first — it is live, not dead, so leaving it open would
-        // leak a connection per recovery.
-        await this.sdkClient?.close().catch(() => undefined);
+        // ⚠️ ONE recovery at a time (issue #33). `recoverSession(true)` closes the
+        // discarded client, and that close settles every in-flight request on it
+        // with `ConnectionClosed`; a second caller that passed this gate while the
+        // first was rebuilding used to close the FIRST caller's freshly built
+        // client. Sharing one single-flight rebuild makes the second caller await
+        // the first instead.
+        //
+        // ⚠️ Clearing the markers is not enough on its own: `attachToolHubTaskRuntime`
+        // reads the capabilities the client captured at `initialize`, and those are
+        // just as stale as the cache. Rebuild the connection so the handshake
+        // re-reads what the server actually offers, then attach against that. The
+        // discarded client is CLOSED first — it is live, not dead, so leaving it
+        // open would leak a connection per recovery.
         try {
-          await this.reinitializeAfterSessionLoss();
+          await this.recoverSession(true);
         } catch (reconnectFailure) {
           // The caller needs the error that actually describes the call, not the
           // reconnect's. Preserve the original and attach the failure as `cause`.
@@ -639,13 +670,36 @@ class HttpMcpSdkAdapter implements McpClient {
         throw rawError;
       }
     }
-    if (!this.recovery) {
-      this.recovery = this.reinitializeAfterSessionLoss().finally(() => {
+    await this.recoverSession(false);
+    return operation();
+  }
+
+  /**
+   * Rebuild the connection ONCE however many callers need it (issue #33).
+   *
+   * `closeDiscardedClient` closes the client being replaced — and only the caller
+   * that STARTS the recovery decides, so a joiner never closes the rebuild it
+   * joined. A task-runtime recovery asks for the close because its discarded
+   * client is still live and would otherwise leak a connection; a session-loss
+   * replay does not, because the transport it is replacing is already gone.
+   */
+  private recoverSession(closeDiscardedClient: boolean): Promise<void> {
+    if (this.recovery === undefined) {
+      this.recovery = (async () => {
+        if (closeDiscardedClient) {
+          // The task runtime names the client being discarded, so retire the
+          // markers in the same critical section that replaces it.
+          this.taskRuntimeClient = undefined;
+          this.taskRuntimeCapabilities = undefined;
+          const discarded = this.sdkClient;
+          await discarded?.close().catch(() => undefined);
+        }
+        await this.reinitializeAfterSessionLoss();
+      })().finally(() => {
         this.recovery = undefined;
       });
     }
-    await this.recovery;
-    return operation();
+    return this.recovery;
   }
 
   private async reinitializeAfterSessionLoss(): Promise<void> {
