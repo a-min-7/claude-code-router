@@ -15,7 +15,7 @@
  * (reset → re-initialize → retry-once) lives in the client classes.
  */
 
-import { SdkErrorCode } from "@modelcontextprotocol/client";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 
 /**
  * HTTP-level error from a remote MCP server (transport/status layer), carrying
@@ -67,14 +67,15 @@ export function isSessionExpiryHttpStatus(status: number, body: string): boolean
 /**
  * True for the SDK's own "the transport is gone" error.
  *
- * ⚠️ Read the code rather than `instanceof SdkError`: the SDK ships dual
- * CJS/ESM builds and this package compiles as CJS, so a second instance of the
- * class (same runtime value in practice, different nominal type) can defeat the
- * check — the same dual-declaration trap `toolhub-tasks.ts` documents. `code` is
- * the stable string the SDK puts on every `SdkError`, whichever build raised it.
+ * ⚠️ `instanceof` IS safe here, which is why the branded guard is used rather
+ * than a bare `code` comparison: `SdkError` defines `Symbol.hasInstance` over an
+ * `mcp.SdkError` brand (and exposes `SdkError.isInstance`) precisely so a type
+ * check survives the package's dual CJS/ESM builds. The `code` comparison alone
+ * would also accept any foreign error that happens to carry
+ * `code: "CONNECTION_CLOSED"`; the pair accepts only the SDK's own error.
  */
 function isConnectionClosedError(error: unknown): boolean {
-  return (error as { code?: unknown } | null | undefined)?.code === SdkErrorCode.ConnectionClosed;
+  return SdkError.isInstance(error) && error.code === SdkErrorCode.ConnectionClosed;
 }
 
 /** True when an error means the remote MCP session/stream is gone. */

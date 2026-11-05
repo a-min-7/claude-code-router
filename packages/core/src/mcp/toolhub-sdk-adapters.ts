@@ -446,6 +446,13 @@ class SseMcpSdkAdapter implements McpClient {
     transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
     capabilities: string
   ): Promise<ToolHubTaskRuntime | undefined> {
+    // ⚠️ A stale attach — one whose client was replaced while it waited — must
+    // touch nothing. Its result can only be discarded, and closing
+    // `this.taskRuntime` would tear down the REPLACEMENT's runtime, which by
+    // then is the live one (issue #34).
+    if (this.sdkClient !== client) {
+      return undefined;
+    }
     // Close only the runtime that existed when this attach STARTED, never
     // `this.taskRuntime` as it stands after the await: an attach for a discarded
     // client can still be in flight beside one for its replacement (issue #34).
@@ -810,6 +817,13 @@ class HttpMcpSdkAdapter implements McpClient {
     transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
     capabilities: string
   ): Promise<ToolHubTaskRuntime | undefined> {
+    // ⚠️ A stale attach — one whose client was replaced while it waited — must
+    // touch nothing. Its result can only be discarded, and closing
+    // `this.taskRuntime` would tear down the REPLACEMENT's runtime, which by
+    // then is the live one (issue #34).
+    if (this.sdkClient !== client) {
+      return undefined;
+    }
     // Close only the runtime that existed when this attach STARTED, never
     // `this.taskRuntime` as it stands after the await: an attach for a discarded
     // client can still be in flight beside one for its replacement (issue #34).
