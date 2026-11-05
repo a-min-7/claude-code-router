@@ -62,6 +62,14 @@ type GatewayMcpStdioServerConfig = NormalizedStdioServerConfig;
 const TOOLHUB_NAME = "ccr-toolhub";
 
 /**
+ * How long one failed task-runtime recovery suppresses the next one (issue #31
+ * review). Without it, a server that keeps answering with a task it cannot
+ * support makes every `tools/call` rebuild the connection — one leaked handshake
+ * per call, forever.
+ */
+const TASK_RECOVERY_COOLDOWN_MS = 30_000;
+
+/**
  * A stable fingerprint of what the server currently claims in its `extensions`
  * map — the same field `serverAdvertisesTasks` reads (issue #31).
  *
@@ -121,6 +129,10 @@ class SseMcpSdkAdapter implements McpClient {
   private taskRuntimeClient: SdkClient | undefined;
   /** The advertised capabilities seen when that runtime was resolved (issue #31). */
   private taskRuntimeCapabilities: string | undefined;
+  /** In-flight attach, shared by concurrent callers so only ONE runtime is built (issue #31 review). */
+  private taskRuntimeAttach: Promise<ToolHubTaskRuntime | undefined> | undefined;
+  /** Epoch ms before which a second recovery attempt is refused, so a non-conforming server cannot leak a handshake per call. */
+  private taskRuntimeRecoveryAfter: number | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -163,21 +175,47 @@ class SseMcpSdkAdapter implements McpClient {
         }
         // ⚠️ Issue #31. The server answered `tools/call` with a task while this
         // connection carried no runtime. The declared capabilities are captured
-        // at `initialize` and never refresh on a live connection, so this
-        // failure is the only reliable signal that the server now offers tasks:
-        // drop the cached answer, resolve again, and retry ONCE through the
-        // runtime. If the retry cannot attach, the original error surfaces.
+        // at `initialize` and never refresh on a live connection, so this failure
+        // is the only reliable signal that the server now offers tasks.
+        //
+        // ⚠️ THE FIRST TASK IS ORPHANED BY DESIGN (issue #31 review). It is
+        // already running upstream, and its handle died in the SDK decoder — the
+        // rejection carries only `{resultType, method}` — so it can be neither
+        // polled nor cancelled. The retry sends a SECOND one. `withSessionRecovery`
+        // forbids replaying a task-backed call for exactly this reason; here the
+        // alternative is to fail while the orphan runs anyway, so one retry is
+        // the lesser cost, and it happens at most once per call.
+        if (this.taskRuntimeRecoveryAfter !== undefined && Date.now() < this.taskRuntimeRecoveryAfter) {
+          // A recent recovery already failed. Churning another handshake per call
+          // leaks a connection for no benefit, so surface the original error.
+          throw error;
+        }
         this.taskRuntimeClient = undefined;
         this.taskRuntimeCapabilities = undefined;
         // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
-        // the capabilities the client captured at `initialize`, and those are
-        // just as stale as the cache. Rebuild the connection so the handshake
-        // re-reads what the server actually offers, then attach against that.
-        await this.reinitializeAfterSessionLoss();
-        const retryRuntime = await this.resolveTaskRuntime();
-        if (!retryRuntime) {
+        // the capabilities the client captured at `initialize`, and those are just
+        // as stale as the cache. Rebuild the connection so the handshake re-reads
+        // what the server actually offers, then attach against that. The discarded
+        // client is CLOSED first — it is live, not dead, so leaving it open would
+        // leak a connection per recovery.
+        await this.sdkClient?.close().catch(() => undefined);
+        try {
+          await this.reinitializeAfterSessionLoss();
+        } catch (reconnectFailure) {
+          // The caller needs the error that actually describes the call, not the
+          // reconnect's. Preserve the original and attach the failure as `cause`.
+          this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
+          if (error instanceof Error && error.cause === undefined) {
+            (error as { cause?: unknown }).cause = reconnectFailure;
+          }
           throw error;
         }
+        const retryRuntime = await this.resolveTaskRuntime();
+        if (!retryRuntime) {
+          this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
+          throw error;
+        }
+        this.taskRuntimeRecoveryAfter = undefined;
         taskBacked = true;
         return retryRuntime.execute(name, args, this.server.requestTimeoutMs);
       }
@@ -326,12 +364,30 @@ class SseMcpSdkAdapter implements McpClient {
     const client = this.sdkClient;
     const transport = this.sdkTransport;
     if (client === undefined || transport === undefined) {
-      return;
+      return undefined;
     }
     const capabilities = taskRuntimeCapabilityFingerprint(client);
     if (this.taskRuntimeClient === client && this.taskRuntimeCapabilities === capabilities) {
-      return;
+      return this.taskRuntime;
     }
+    // ⚠️ ONE attach per client/capability pair, shared by concurrent callers
+    // (issue #31 review). Since the markers are now set only AFTER the attach,
+    // two parallel `tools/call`s would both pass the guard above and install two
+    // RawRequestChannels on one transport — whose counters start at the same id,
+    // so responses cross. The in-flight promise closes that window.
+    if (this.taskRuntimeAttach === undefined) {
+      this.taskRuntimeAttach = this.attachTaskRuntime(client, transport, capabilities).finally(() => {
+        this.taskRuntimeAttach = undefined;
+      });
+    }
+    return this.taskRuntimeAttach;
+  }
+
+  private async attachTaskRuntime(
+    client: SdkClient,
+    transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
+    capabilities: string
+  ): Promise<ToolHubTaskRuntime | undefined> {
     await this.taskRuntime?.close().catch(() => undefined);
     this.taskRuntime = undefined;
     try {
@@ -343,22 +399,17 @@ class SseMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
-      // ⚠️ Issue #31: the markers move to AFTER the attempt answers. Set before
-      // the `await`, a *thrown* attach retired this client for the life of the
-      // connection — the guard above returned on every later call, and the plain
-      // path then answered `Unsupported result type 'task'` for a server that
-      // had since started advertising. `taskRuntimeClient` now names a client the
-      // runtime is really attached to, which is what its comment always claimed.
       this.taskRuntime = runtime;
       this.taskRuntimeClient = client;
       this.taskRuntimeCapabilities = capabilities;
+      return runtime;
     } catch {
       // Markers deliberately left unset so the next call retries. The swallow
       // itself is intended: tasks are an enhancement and must never break the
       // plain path.
       this.taskRuntime = undefined;
+      return undefined;
     }
-    return this.taskRuntime;
   }
 }
 
@@ -377,6 +428,10 @@ class HttpMcpSdkAdapter implements McpClient {
   private taskRuntimeClient: SdkClient | undefined;
   /** The advertised capabilities seen when that runtime was resolved (issue #31). */
   private taskRuntimeCapabilities: string | undefined;
+  /** In-flight attach, shared by concurrent callers so only ONE runtime is built (issue #31 review). */
+  private taskRuntimeAttach: Promise<ToolHubTaskRuntime | undefined> | undefined;
+  /** Epoch ms before which a second recovery attempt is refused, so a non-conforming server cannot leak a handshake per call. */
+  private taskRuntimeRecoveryAfter: number | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
 
   constructor(
@@ -419,21 +474,47 @@ class HttpMcpSdkAdapter implements McpClient {
         }
         // ⚠️ Issue #31. The server answered `tools/call` with a task while this
         // connection carried no runtime. The declared capabilities are captured
-        // at `initialize` and never refresh on a live connection, so this
-        // failure is the only reliable signal that the server now offers tasks:
-        // drop the cached answer, resolve again, and retry ONCE through the
-        // runtime. If the retry cannot attach, the original error surfaces.
+        // at `initialize` and never refresh on a live connection, so this failure
+        // is the only reliable signal that the server now offers tasks.
+        //
+        // ⚠️ THE FIRST TASK IS ORPHANED BY DESIGN (issue #31 review). It is
+        // already running upstream, and its handle died in the SDK decoder — the
+        // rejection carries only `{resultType, method}` — so it can be neither
+        // polled nor cancelled. The retry sends a SECOND one. `withSessionRecovery`
+        // forbids replaying a task-backed call for exactly this reason; here the
+        // alternative is to fail while the orphan runs anyway, so one retry is
+        // the lesser cost, and it happens at most once per call.
+        if (this.taskRuntimeRecoveryAfter !== undefined && Date.now() < this.taskRuntimeRecoveryAfter) {
+          // A recent recovery already failed. Churning another handshake per call
+          // leaks a connection for no benefit, so surface the original error.
+          throw error;
+        }
         this.taskRuntimeClient = undefined;
         this.taskRuntimeCapabilities = undefined;
         // ⚠️ Clearing the markers is not enough: `attachToolHubTaskRuntime` reads
-        // the capabilities the client captured at `initialize`, and those are
-        // just as stale as the cache. Rebuild the connection so the handshake
-        // re-reads what the server actually offers, then attach against that.
-        await this.reinitializeAfterSessionLoss();
-        const retryRuntime = await this.resolveTaskRuntime();
-        if (!retryRuntime) {
+        // the capabilities the client captured at `initialize`, and those are just
+        // as stale as the cache. Rebuild the connection so the handshake re-reads
+        // what the server actually offers, then attach against that. The discarded
+        // client is CLOSED first — it is live, not dead, so leaving it open would
+        // leak a connection per recovery.
+        await this.sdkClient?.close().catch(() => undefined);
+        try {
+          await this.reinitializeAfterSessionLoss();
+        } catch (reconnectFailure) {
+          // The caller needs the error that actually describes the call, not the
+          // reconnect's. Preserve the original and attach the failure as `cause`.
+          this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
+          if (error instanceof Error && error.cause === undefined) {
+            (error as { cause?: unknown }).cause = reconnectFailure;
+          }
           throw error;
         }
+        const retryRuntime = await this.resolveTaskRuntime();
+        if (!retryRuntime) {
+          this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
+          throw error;
+        }
+        this.taskRuntimeRecoveryAfter = undefined;
         taskBacked = true;
         return retryRuntime.execute(name, args, this.server.requestTimeoutMs);
       }
@@ -580,12 +661,30 @@ class HttpMcpSdkAdapter implements McpClient {
     const client = this.sdkClient;
     const transport = this.sdkTransport;
     if (client === undefined || transport === undefined) {
-      return;
+      return undefined;
     }
     const capabilities = taskRuntimeCapabilityFingerprint(client);
     if (this.taskRuntimeClient === client && this.taskRuntimeCapabilities === capabilities) {
-      return;
+      return this.taskRuntime;
     }
+    // ⚠️ ONE attach per client/capability pair, shared by concurrent callers
+    // (issue #31 review). Since the markers are now set only AFTER the attach,
+    // two parallel `tools/call`s would both pass the guard above and install two
+    // RawRequestChannels on one transport — whose counters start at the same id,
+    // so responses cross. The in-flight promise closes that window.
+    if (this.taskRuntimeAttach === undefined) {
+      this.taskRuntimeAttach = this.attachTaskRuntime(client, transport, capabilities).finally(() => {
+        this.taskRuntimeAttach = undefined;
+      });
+    }
+    return this.taskRuntimeAttach;
+  }
+
+  private async attachTaskRuntime(
+    client: SdkClient,
+    transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
+    capabilities: string
+  ): Promise<ToolHubTaskRuntime | undefined> {
     await this.taskRuntime?.close().catch(() => undefined);
     this.taskRuntime = undefined;
     try {
@@ -597,22 +696,17 @@ class HttpMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
-      // ⚠️ Issue #31: the markers move to AFTER the attempt answers. Set before
-      // the `await`, a *thrown* attach retired this client for the life of the
-      // connection — the guard above returned on every later call, and the plain
-      // path then answered `Unsupported result type 'task'` for a server that
-      // had since started advertising. `taskRuntimeClient` now names a client the
-      // runtime is really attached to, which is what its comment always claimed.
       this.taskRuntime = runtime;
       this.taskRuntimeClient = client;
       this.taskRuntimeCapabilities = capabilities;
+      return runtime;
     } catch {
       // Markers deliberately left unset so the next call retries. The swallow
       // itself is intended: tasks are an enhancement and must never break the
       // plain path.
       this.taskRuntime = undefined;
+      return undefined;
     }
-    return this.taskRuntime;
   }
 }
 
