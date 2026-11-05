@@ -613,3 +613,138 @@ test("two concurrent recoveries share one rebuild instead of closing each other'
     await fixture.close();
   }
 });
+
+test("an attach in flight for a discarded client is not reused after the rebuild (issue #34)", async () => {
+  // The window: `resolveTaskRuntime()` awaits an attach for client C0; the
+  // recovery block closes C0 and builds C1. The next caller must start an attach
+  // for C1 rather than await the promise still working against C0 — which settles
+  // against a dead transport, fails the retry, and arms the cooldown where a
+  // fresh attach would have succeeded.
+  const live = { advertiseTasks: false };
+  const fixture = await startFixture({ live, toolBehaviour: "task" });
+  class SlowAttachAdapter extends HttpMcpSdkAdapter {
+    attachAttempts = 0;
+    /** The client whose attach is parked, so the stale one is the slow one. */
+    parkAttachFor = undefined;
+
+    async attachTaskRuntime(client, transport, capabilities) {
+      this.attachAttempts += 1;
+      if (client === this.parkAttachFor) {
+        this.parkAttachFor = undefined;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return super.attachTaskRuntime(client, transport, capabilities);
+    }
+  }
+  const adapter = new SlowAttachAdapter(makeServerConfig({ url: fixture.url }), (value) => value);
+  try {
+    // Establish the connection while the server does not advertise, so the
+    // warm-up attaches nothing; then rebuild on a handshake that does.
+    assert.equal(
+      (await adapter.callTool(TOOL_NAME, { input: "warm" })).content[0].text,
+      "PLAIN ANSWER"
+    );
+    live.advertiseTasks = true;
+    await adapter.reinitializeAfterSessionLoss(); // C0, which advertises
+    const attemptsBefore = adapter.attachAttempts;
+    adapter.parkAttachFor = adapter.sdkClient;
+    const stale = adapter.resolveTaskRuntime(); // attaches to C0, parked
+    const discarded = adapter.sdkClient;
+    await discarded.close(); // exactly what the recovery block does
+    await adapter.reinitializeAfterSessionLoss(); // C1 replaces C0
+    const runtime = await adapter.resolveTaskRuntime(); // must attach to C1
+    assert.ok(runtime, "the rebuilt client must get its own attach");
+    const result = await runtime.execute(TOOL_NAME, { input: "q" }, 120_000);
+    assert.equal(result.content[0].text, ANSWER, "the runtime must be wired to the live client");
+    assert.equal(
+      adapter.attachAttempts - attemptsBefore,
+      2,
+      "the stale attach must not be reused after the client is discarded"
+    );
+    await stale;
+  } finally {
+    await adapter.close();
+    await fixture.close();
+  }
+});
+
+test("a successful attach clears a cooldown armed by an earlier failed recovery (issue #34)", async () => {
+  // The cooldown used to be cleared only by the recovery block's own success, so a
+  // later attach on the NORMAL path could leave a future timestamp armed. That
+  // suppresses a recovery that should happen — the server becomes healthy and
+  // advertising inside the window while the current client's stale handshake
+  // makes the normal-path attach a no-op.
+  const live = { advertiseTasks: false, forceTask: false };
+  const fixture = await startFixture({ live, toolBehaviour: "task" });
+  const adapter = new HttpMcpSdkAdapter(makeServerConfig({ url: fixture.url }), (value) => value);
+  try {
+    // C0's handshake says the server does not advertise, so the warm-up takes
+    // the plain path and attaches no runtime.
+    assert.equal(
+      (await adapter.callTool(TOOL_NAME, { input: "warm" })).content[0].text,
+      "PLAIN ANSWER"
+    );
+    live.forceTask = true; // the server answers with a task it never advertised
+    await assert.rejects(
+      () => adapter.callTool(TOOL_NAME, { input: "q" }),
+      (error) => error?.code === "UNSUPPORTED_RESULT_TYPE"
+    );
+    assert.ok(
+      adapter.taskRuntimeRecoveryAfter > Date.now(),
+      "a failed recovery must arm the cooldown"
+    );
+    live.advertiseTasks = true; // healthy and advertising now
+    await adapter.reinitializeAfterSessionLoss(); // a fresh handshake sees it
+    const runtime = await adapter.resolveTaskRuntime();
+    assert.ok(runtime, "the rebuilt connection must attach");
+    assert.equal(
+      adapter.taskRuntimeRecoveryAfter,
+      undefined,
+      "a successful attach must clear the cooldown, or a later recovery stays suppressed for its tail"
+    );
+  } finally {
+    await adapter.close();
+    await fixture.close();
+  }
+});
+
+test("a reconnect failure is logged when the original error cannot carry it (issue #34)", async () => {
+  // `isUnsupportedResultTypeError` deliberately admits non-`Error` throwables, and
+  // an `Error` may already carry a `cause`. On both paths the reconnect failure
+  // used to vanish entirely, so a caller could not tell why recovery failed.
+  class ReconnectFailsAdapter extends HttpMcpSdkAdapter {
+    async reinitializeAfterSessionLoss() {
+      throw new Error("reconnect refused");
+    }
+  }
+  const adapter = new ReconnectFailsAdapter(makeServerConfig({}), (value) => value);
+  const fakeClient = {
+    callTool: async () => {
+      throw "Unsupported result type 'task' for tools/call"; // deliberately not an Error
+    },
+    close: async () => undefined,
+    getServerCapabilities: () => ({ extensions: {} })
+  };
+  // Wire the adapter to a throwable the SDK would not produce, so the non-`Error`
+  // branch is reachable; the capability markers match, so no attach is attempted.
+  adapter.sdkClient = fakeClient;
+  adapter.sdkTransport = {};
+  adapter.initialized = true;
+  adapter.connected = true;
+  adapter.taskRuntimeClient = fakeClient;
+  adapter.taskRuntimeCapabilities = JSON.stringify({});
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    await assert.rejects(() => adapter.callTool(TOOL_NAME, { input: "q" }));
+  } finally {
+    console.warn = originalWarn;
+    await adapter.close();
+  }
+  assert.equal(warnings.length, 1, `expected exactly one log, got ${JSON.stringify(warnings)}`);
+  assert.ok(
+    warnings[0].includes("reconnect refused"),
+    `the reconnect failure must be readable, got: ${warnings[0]}`
+  );
+});
