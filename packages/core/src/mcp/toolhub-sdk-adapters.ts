@@ -106,6 +106,11 @@ function isUnsupportedResultTypeError(error: unknown): boolean {
   return /unsupported result type/i.test(message) && /task/i.test(message);
 }
 
+/** Render a throwable for a log line without assuming it is an `Error`. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ─── SSE adapter ────────────────────────────────────────────────────
 /**
  * Wraps the SDK's SSEClientTransport. The SDK (2.3.1) deprecates this
@@ -129,8 +134,15 @@ class SseMcpSdkAdapter implements McpClient {
   private taskRuntimeClient: SdkClient | undefined;
   /** The advertised capabilities seen when that runtime was resolved (issue #31). */
   private taskRuntimeCapabilities: string | undefined;
-  /** In-flight attach, shared by concurrent callers so only ONE runtime is built (issue #31 review). */
-  private taskRuntimeAttach: Promise<ToolHubTaskRuntime | undefined> | undefined;
+  /**
+   * In-flight attach, shared by concurrent callers so only ONE runtime is built
+   * (issue #31 review) — and KEYED ON THE CLIENT it was started for (issue #34),
+   * so a caller on a rebuilt client never joins an attach that is still working
+   * against the client the recovery just discarded.
+   */
+  private taskRuntimeAttach:
+    | { capabilities: string; client: SdkClient; promise: Promise<ToolHubTaskRuntime | undefined> }
+    | undefined;
   /** Epoch ms before which a second recovery attempt is refused, so a non-conforming server cannot leak a handshake per call. */
   private taskRuntimeRecoveryAfter: number | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
@@ -211,6 +223,13 @@ class SseMcpSdkAdapter implements McpClient {
           this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
           if (error instanceof Error && error.cause === undefined) {
             (error as { cause?: unknown }).cause = reconnectFailure;
+          } else {
+            // The original error cannot carry the cause — it is not an `Error`, or
+            // it already has one — so log the reconnect failure instead of
+            // dropping it on the floor (issue #34).
+            console.warn(
+              `[${this.server.name}] Task-runtime recovery failed to reconnect: ${describeError(reconnectFailure)}`
+            );
           }
           throw error;
         }
@@ -402,12 +421,24 @@ class SseMcpSdkAdapter implements McpClient {
     // two parallel `tools/call`s would both pass the guard above and install two
     // RawRequestChannels on one transport — whose counters start at the same id,
     // so responses cross. The in-flight promise closes that window.
-    if (this.taskRuntimeAttach === undefined) {
-      this.taskRuntimeAttach = this.attachTaskRuntime(client, transport, capabilities).finally(() => {
-        this.taskRuntimeAttach = undefined;
-      });
+    //
+    // ⚠️ Keyed on the client it was started for (issue #34): the recovery block
+    // replaces the client, and a caller arriving after the rebuild must not await
+    // an attach that is still working against the discarded one.
+    const pending = this.taskRuntimeAttach;
+    if (pending !== undefined && pending.client === client && pending.capabilities === capabilities) {
+      return pending.promise;
     }
-    return this.taskRuntimeAttach;
+    const promise = this.attachTaskRuntime(client, transport, capabilities);
+    this.taskRuntimeAttach = { client, capabilities, promise };
+    promise
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.taskRuntimeAttach?.promise === promise) {
+          this.taskRuntimeAttach = undefined;
+        }
+      });
+    return promise;
   }
 
   private async attachTaskRuntime(
@@ -415,8 +446,12 @@ class SseMcpSdkAdapter implements McpClient {
     transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
     capabilities: string
   ): Promise<ToolHubTaskRuntime | undefined> {
-    await this.taskRuntime?.close().catch(() => undefined);
+    // Close only the runtime that existed when this attach STARTED, never
+    // `this.taskRuntime` as it stands after the await: an attach for a discarded
+    // client can still be in flight beside one for its replacement (issue #34).
+    const previous = this.taskRuntime;
     this.taskRuntime = undefined;
+    await previous?.close().catch(() => undefined);
     try {
       const runtime = await attachToolHubTaskRuntime({
         client,
@@ -426,15 +461,25 @@ class SseMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
+      if (this.sdkClient !== client) {
+        // The connection was replaced while this attach was in flight, so the
+        // runtime (if any) is wired to a discarded transport. Keep it out of the
+        // fields and release it; the current client gets its own attach (#34).
+        await runtime?.close().catch(() => undefined);
+        return undefined;
+      }
       this.taskRuntime = runtime;
       this.taskRuntimeClient = client;
       this.taskRuntimeCapabilities = capabilities;
+      // A working attach means the task path is healthy again, so a cooldown that
+      // an earlier failed recovery armed must not keep suppressing recoveries for
+      // the rest of its window (issue #34).
+      this.taskRuntimeRecoveryAfter = undefined;
       return runtime;
     } catch {
       // Markers deliberately left unset so the next call retries. The swallow
       // itself is intended: tasks are an enhancement and must never break the
       // plain path.
-      this.taskRuntime = undefined;
       return undefined;
     }
   }
@@ -455,8 +500,15 @@ class HttpMcpSdkAdapter implements McpClient {
   private taskRuntimeClient: SdkClient | undefined;
   /** The advertised capabilities seen when that runtime was resolved (issue #31). */
   private taskRuntimeCapabilities: string | undefined;
-  /** In-flight attach, shared by concurrent callers so only ONE runtime is built (issue #31 review). */
-  private taskRuntimeAttach: Promise<ToolHubTaskRuntime | undefined> | undefined;
+  /**
+   * In-flight attach, shared by concurrent callers so only ONE runtime is built
+   * (issue #31 review) — and KEYED ON THE CLIENT it was started for (issue #34),
+   * so a caller on a rebuilt client never joins an attach that is still working
+   * against the client the recovery just discarded.
+   */
+  private taskRuntimeAttach:
+    | { capabilities: string; client: SdkClient; promise: Promise<ToolHubTaskRuntime | undefined> }
+    | undefined;
   /** Epoch ms before which a second recovery attempt is refused, so a non-conforming server cannot leak a handshake per call. */
   private taskRuntimeRecoveryAfter: number | undefined;
   private static readonly probeCache = new ProtocolEraCache(60_000);
@@ -537,6 +589,13 @@ class HttpMcpSdkAdapter implements McpClient {
           this.taskRuntimeRecoveryAfter = Date.now() + TASK_RECOVERY_COOLDOWN_MS;
           if (error instanceof Error && error.cause === undefined) {
             (error as { cause?: unknown }).cause = reconnectFailure;
+          } else {
+            // The original error cannot carry the cause — it is not an `Error`, or
+            // it already has one — so log the reconnect failure instead of
+            // dropping it on the floor (issue #34).
+            console.warn(
+              `[${this.server.name}] Task-runtime recovery failed to reconnect: ${describeError(reconnectFailure)}`
+            );
           }
           throw error;
         }
@@ -726,12 +785,24 @@ class HttpMcpSdkAdapter implements McpClient {
     // two parallel `tools/call`s would both pass the guard above and install two
     // RawRequestChannels on one transport — whose counters start at the same id,
     // so responses cross. The in-flight promise closes that window.
-    if (this.taskRuntimeAttach === undefined) {
-      this.taskRuntimeAttach = this.attachTaskRuntime(client, transport, capabilities).finally(() => {
-        this.taskRuntimeAttach = undefined;
-      });
+    //
+    // ⚠️ Keyed on the client it was started for (issue #34): the recovery block
+    // replaces the client, and a caller arriving after the rebuild must not await
+    // an attach that is still working against the discarded one.
+    const pending = this.taskRuntimeAttach;
+    if (pending !== undefined && pending.client === client && pending.capabilities === capabilities) {
+      return pending.promise;
     }
-    return this.taskRuntimeAttach;
+    const promise = this.attachTaskRuntime(client, transport, capabilities);
+    this.taskRuntimeAttach = { client, capabilities, promise };
+    promise
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.taskRuntimeAttach?.promise === promise) {
+          this.taskRuntimeAttach = undefined;
+        }
+      });
+    return promise;
   }
 
   private async attachTaskRuntime(
@@ -739,8 +810,12 @@ class HttpMcpSdkAdapter implements McpClient {
     transport: Parameters<typeof attachToolHubTaskRuntime>[0]["transport"],
     capabilities: string
   ): Promise<ToolHubTaskRuntime | undefined> {
-    await this.taskRuntime?.close().catch(() => undefined);
+    // Close only the runtime that existed when this attach STARTED, never
+    // `this.taskRuntime` as it stands after the await: an attach for a discarded
+    // client can still be in flight beside one for its replacement (issue #34).
+    const previous = this.taskRuntime;
     this.taskRuntime = undefined;
+    await previous?.close().catch(() => undefined);
     try {
       const runtime = await attachToolHubTaskRuntime({
         client,
@@ -750,15 +825,25 @@ class HttpMcpSdkAdapter implements McpClient {
         clientInfo: { name: TOOLHUB_NAME, version: "1.0.0" },
         clientCapabilities: toolHubClientCapabilities()
       });
+      if (this.sdkClient !== client) {
+        // The connection was replaced while this attach was in flight, so the
+        // runtime (if any) is wired to a discarded transport. Keep it out of the
+        // fields and release it; the current client gets its own attach (#34).
+        await runtime?.close().catch(() => undefined);
+        return undefined;
+      }
       this.taskRuntime = runtime;
       this.taskRuntimeClient = client;
       this.taskRuntimeCapabilities = capabilities;
+      // A working attach means the task path is healthy again, so a cooldown that
+      // an earlier failed recovery armed must not keep suppressing recoveries for
+      // the rest of its window (issue #34).
+      this.taskRuntimeRecoveryAfter = undefined;
       return runtime;
     } catch {
       // Markers deliberately left unset so the next call retries. The swallow
       // itself is intended: tasks are an enhancement and must never break the
       // plain path.
-      this.taskRuntime = undefined;
       return undefined;
     }
   }
