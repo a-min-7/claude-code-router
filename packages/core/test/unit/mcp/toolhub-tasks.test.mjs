@@ -661,7 +661,8 @@ test("an attach in flight for a discarded client is not reused after the rebuild
       2,
       "the stale attach must not be reused after the client is discarded"
     );
-    await stale;
+    assert.equal(await stale, undefined, "the stale attach must not yield a runtime after its client is discarded");
+    assert.equal(adapter.taskRuntime, runtime, "the installed runtime must be the one built on the live client");
   } finally {
     await adapter.close();
     await fixture.close();
