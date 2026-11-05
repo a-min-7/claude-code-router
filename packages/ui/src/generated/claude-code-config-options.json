@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-17T08:40:19.998Z",
+  "generatedAt": "2026-11-05T18:41:36.896Z",
   "generatedBy": "scripts/generate-claude-code-config-options.mjs",
   "sourceUrls": {
     "envEn": "https://code.claude.com/docs/en/env-vars.md",
@@ -52,8 +52,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Allow Claude to send a push notification to your phone when it decides one is worth sending, for example when a long task finishes. Claude Code syncs this choice to your account, and pushes arrive while Remote Control is connected. Appears in /config as Push when Claude decides.",
-        "zh": "Allow Claude to send a push notification to your phone when it decides one is worth sending, for example when a long task finishes. Claude Code syncs this choice to your account, and pushes arrive while Remote Control is connected. Appears in /config as Push when Claude decides."
+        "en": "Allow Claude to send a push notification to your phone when it decides one is worth sending, for example when a long task finishes. Claude can send one while Remote Control is connected. Appears in /config as Push when Claude decides. When you change it there, Claude Code also saves the value to your account.",
+        "zh": "Allow Claude to send a push notification to your phone when it decides one is worth sending, for example when a long task finishes. Claude can send one while Remote Control is connected. Appears in /config as Push when Claude decides. When you change it there, Claude Code also saves the value to your account."
       }
     },
     {
@@ -126,7 +126,7 @@
         "allowedMcpServers"
       ],
       "scope": "Any file. Entries from every file merge into one allowlist unless allowManagedMcpServersOnly is set. Deploy it in managed settings to enforce it.",
-      "type": "array of objects, each with exactly one key: serverName, a string limited to letters, numbers, hyphens, and underscores; serverCommand, an array of the command and its arguments matched exactly; or serverUrl, a URL pattern with * wildcards",
+      "type": "array of objects, each with exactly one key. Use serverName, a string limited to letters, numbers, hyphens, and underscores; serverCommand, an array of the command and its arguments matched exactly; or serverUrl, a URL pattern with * wildcards",
       "default": "unset, so every server is allowed; an empty array blocks every server users add",
       "example": "{\n  \"allowedMcpServers\": [\n    { \"serverCommand\": [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\"] }\n  ]\n}",
       "valueKind": "number",
@@ -246,7 +246,7 @@
       "path": [
         "appendPlugins"
       ],
-      "scope": "User or managed. Claude Code reads the key from managed settings. It reads the key from user settings only on a machine with no managed settings, for a user who isn't signed in with a Team or Enterprise plan. It ignores the key in project and local settings and in a --settings file.",
+      "scope": "User or managed. Claude Code reads the key from managed settings. It reads the key from user settings only on a machine with no managed settings, in a session whose credential isn't a Team or Enterprise /login. It ignores the key in project and local settings and in a --settings file.",
       "type": "array of plugin-name@marketplace-name strings",
       "default": "unset",
       "example": "{\n  \"extraKnownMarketplaces\": {\n    \"acme-tools\": {\n      \"source\": { \"source\": \"directory\", \"path\": \"/opt/acme/claude-plugins\" }\n    }\n  },\n  \"enabledPlugins\": { \"acme-audit@acme-tools\": true },\n  \"appendPlugins\": [\"acme-audit@acme-tools\"]\n}",
@@ -576,7 +576,7 @@
       "path": [
         "axScreenReader"
       ],
-      "scope": "Any file",
+      "scope": "User or managed. You can also set the key in a file you pass with --settings. Claude Code ignores the key in project and local settings, so neither a repository nor your own .claude/settings.local.json can turn screen-reader mode on or off.",
       "type": "Boolean",
       "default": "unset, so screen-reader mode is off",
       "example": "{\n  \"axScreenReader\": true\n}",
@@ -658,7 +658,7 @@
       ],
       "scope": "Managed",
       "type": "Boolean",
-      "default": "unset; channels are blocked on Team and Enterprise plans and on Console accounts with managed settings, and allowed on Pro and Max plans and on Console accounts without managed settings",
+      "default": "unset; channels are blocked on Team and Enterprise plans and on Console accounts with managed settings, and allowed on Pro, Max, and Ultra plans and on Console accounts without managed settings",
       "example": "{\n  \"channelsEnabled\": true\n}",
       "valueKind": "boolean",
       "enumValues": [],
@@ -878,8 +878,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Use enableArtifact instead to turn off the Artifact tool, which publishes session output as a private web page on claude.ai. When you turn the Artifacts row off in /config, Claude Code writes enableArtifact to your user settings and clears this key.",
-        "zh": "Use enableArtifact instead to turn off the Artifact tool, which publishes session output as a private web page on claude.ai. When you turn the Artifacts row off in /config, Claude Code writes enableArtifact to your user settings and clears this key."
+        "en": "> [!WARNING] > > Deprecated, and replaced by enableArtifact. Claude Code still honors disableArtifact: true as equivalent to enableArtifact: false, and ignores disableArtifact: false.",
+        "zh": "> [!WARNING] > > Deprecated, and replaced by enableArtifact. Claude Code still honors disableArtifact: true as equivalent to enableArtifact: false, and ignores disableArtifact: false."
       }
     },
     {
@@ -953,7 +953,7 @@
       ],
       "scope": "Managed",
       "type": "Boolean",
-      "default": "unset, so Claude Code follows allowManagedHooksOnly: an organization that restricts hook execution to managed settings gets command sources disabled too",
+      "default": "unset, so Claude Code follows allowManagedHooksOnly: an organization that restricts hook execution to managed settings gets command sources disabled too. An application that passes disableAllHooks: true in the Agent SDK's managedSettings option doesn't by itself disable command sources.",
       "example": "{\n  \"disableCommandPluginSources\": true\n}",
       "valueKind": "boolean",
       "enumValues": [],
@@ -974,8 +974,8 @@
       "valueKind": "string",
       "enumValues": [],
       "description": {
-        "en": "Stop Claude Code from registering the claude-cli:// protocol handler with the operating system, which it otherwise does after you send the first prompt of an interactive session. Deep links let external tools open a Claude Code session with a pre-filled prompt. Set this in environments where protocol handler registration is restricted or managed separately.",
-        "zh": "Stop Claude Code from registering the claude-cli:// protocol handler with the operating system, which it otherwise does after you send the first prompt of an interactive session. Deep links let external tools open a Claude Code session with a pre-filled prompt. Set this in environments where protocol handler registration is restricted or managed separately."
+        "en": "Stop Claude Code from registering the claude-cli:// protocol handler with the operating system. Deep links let external tools open a Claude Code session with a pre-filled prompt. Set this in environments where protocol handler registration is restricted or managed separately.",
+        "zh": "Stop Claude Code from registering the claude-cli:// protocol handler with the operating system. Deep links let external tools open a Claude Code session with a pre-filled prompt. Set this in environments where protocol handler registration is restricted or managed separately."
       }
     },
     {
@@ -990,8 +990,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Turn off Code sessions that run on the device in the desktop app, for deployments where developers should work on remote machines over SSH. In the Code tab, the Local environment stays in the environment dropdown but is grayed out and can't be selected, with a tooltip saying your organization turned it off; on Windows the WSL entry is grayed out the same way, though whether WSL sessions run on a managed device at all is governed separately. New sessions default to the first SSH connection if one is configured, and the app refuses to start or resume a session on the device, including an SSH connection back to the same machine. SSH sessions to other hosts and cloud sessions are unaffected. The desktop app reads this key; the terminal CLI ignores it. Requires Claude Desktop v1.37937.0 or later.",
-        "zh": "Turn off Code sessions that run on the device in the desktop app, for deployments where developers should work on remote machines over SSH. In the Code tab, the Local environment stays in the environment dropdown but is grayed out and can't be selected, with a tooltip saying your organization turned it off; on Windows the WSL entry is grayed out the same way, though whether WSL sessions run on a managed device at all is governed separately. New sessions default to the first SSH connection if one is configured, and the app refuses to start or resume a session on the device, including an SSH connection back to the same machine. SSH sessions to other hosts and cloud sessions are unaffected. The desktop app reads this key; the terminal CLI ignores it. Requires Claude Desktop v1.37937.0 or later."
+        "en": "Turn off Code sessions that run on the device in the desktop app, for deployments where developers should work on remote machines over SSH. With the key set to true, users see this in the Code tab:",
+        "zh": "Turn off Code sessions that run on the device in the desktop app, for deployments where developers should work on remote machines over SSH. With the key set to true, users see this in the Code tab:"
       }
     },
     {
@@ -1422,8 +1422,8 @@
         "gateway"
       ],
       "description": {
-        "en": "Restrict which kind of account people can log in with. Set \"claudeai\" to allow only claude.ai accounts, \"console\" to allow only Claude Console accounts, or \"gateway\" to send people to a cloud gateway instead of a first-party login. Administrators set it in managed settings and pair it with forceLoginOrgUUID to keep developers' claude.ai logins inside one organization. If you set it to \"claudeai\" or \"console\" in any settings file, Claude Code also stops offering the keyless Console sign-in in the sessions that file applies to.",
-        "zh": "Restrict which kind of account people can log in with. Set \"claudeai\" to allow only claude.ai accounts, \"console\" to allow only Claude Console accounts, or \"gateway\" to send people to a cloud gateway instead of a first-party login. Administrators set it in managed settings and pair it with forceLoginOrgUUID to keep developers' claude.ai logins inside one organization. If you set it to \"claudeai\" or \"console\" in any settings file, Claude Code also stops offering the keyless Console sign-in in the sessions that file applies to."
+        "en": "Restrict which kind of account people can log in with. Set \"claudeai\" to allow only claude.ai accounts, \"console\" to allow only Claude Console accounts, or \"gateway\" to send people to a cloud gateway instead of a first-party login. Administrators set it in managed settings and pair it with forceLoginOrgUUID to keep developers' claude.ai logins inside one organization.",
+        "zh": "Restrict which kind of account people can log in with. Set \"claudeai\" to allow only claude.ai accounts, \"console\" to allow only Claude Console accounts, or \"gateway\" to send people to a cloud gateway instead of a first-party login. Administrators set it in managed settings and pair it with forceLoginOrgUUID to keep developers' claude.ai logins inside one organization."
       }
     },
     {
@@ -1534,8 +1534,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Idle compaction compacts a long conversation that you've stepped away from, shortly before its prompt cache expires. Your next message then sends a summary instead of the whole conversation. When you come back, the conversation shows Compacted while idle, before the prompt cache expired.",
-        "zh": "Idle compaction compacts a long conversation that you've stepped away from, shortly before its prompt cache expires. Your next message then sends a summary instead of the whole conversation. When you come back, the conversation shows Compacted while idle, before the prompt cache expired."
+        "en": "Idle compaction compacts a long conversation that you've stepped away from. Your next message then sends a summary instead of the whole conversation. Once compacted, the conversation shows a notice:",
+        "zh": "Idle compaction compacts a long conversation that you've stepped away from. Your next message then sends a summary instead of the whole conversation. Once compacted, the conversation shows a notice:"
       }
     },
     {
@@ -1550,8 +1550,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Use attribution instead, which replaces this key and lets you change or hide the commit trailer, the pull request text, and the session link separately. Claude Code still honors includeCoAuthoredBy: false from settings files that predate attribution, but ignores it once you set attribution.commit or attribution.pr.",
-        "zh": "Use attribution instead, which replaces this key and lets you change or hide the commit trailer, the pull request text, and the session link separately. Claude Code still honors includeCoAuthoredBy: false from settings files that predate attribution, but ignores it once you set attribution.commit or attribution.pr."
+        "en": "> [!WARNING] > > Deprecated since v2.0.62, when attribution replaced it. Claude Code still reads it, but new configurations should set attribution.",
+        "zh": "> [!WARNING] > > Deprecated since v2.0.62, when attribution replaced it. Claude Code still reads it, but new configurations should set attribution."
       }
     },
     {
@@ -1614,8 +1614,8 @@
       "valueKind": "string",
       "enumValues": [],
       "description": {
-        "en": "In v2.1.238 through v2.1.260, setting it to \"readline\" made Ctrl+W delete back to the previous whitespace instead of only the previous word.",
-        "zh": "In v2.1.238 through v2.1.260, setting it to \"readline\" made Ctrl+W delete back to the previous whitespace instead of only the previous word."
+        "en": "> [!WARNING] > > Deprecated since v2.1.261 and has no effect. The prompt's word-editing keys always follow readline conventions, as in Bash. Claude Code still accepts keybindingFlavor, so a settings file that sets it stays valid.",
+        "zh": "> [!WARNING] > > Deprecated since v2.1.261 and has no effect. The prompt's word-editing keys always follow readline conventions, as in Bash. Claude Code still accepts keybindingFlavor, so a settings file that sets it stays valid."
       }
     },
     {
@@ -1854,14 +1854,14 @@
         "permissions"
       ],
       "scope": "Any file",
-      "type": "object with allow, ask, deny, additionalDirectories, blockReadsOutsideWorkingDirectories, defaultMode, disableBypassPermissionsMode, and disableAutoMode",
+      "type": "object with allow, ask, deny, additionalDirectories, blockReadsOutsideWorkingDirectories, blockWritesOutsideWorkingDirectories, defaultMode, disableBypassPermissionsMode, and disableAutoMode",
       "default": "unset",
       "example": "{\n  \"permissions\": {\n    \"allow\": [\"Bash(npm run *)\"],\n    \"ask\": [\"Bash(git push *)\"],\n    \"deny\": [\"Read(./.env)\"],\n    \"defaultMode\": \"acceptEdits\"\n  }\n}",
       "valueKind": "object",
       "enumValues": [],
       "description": {
-        "en": "Control which tools Claude can use without asking, which ones always prompt, and which ones are blocked, and set the permission mode a session starts in. Every permissions.* key below nests under this object.",
-        "zh": "Control which tools Claude can use without asking, which ones always prompt, and which ones are blocked, and set the permission mode a session starts in. Every permissions.* key below nests under this object."
+        "en": "Control which tools Claude can use without asking, which ones prompt, and which ones are blocked. Also set the default permission mode for new sessions. Every permissions.* key below nests under this object.",
+        "zh": "Control which tools Claude can use without asking, which ones prompt, and which ones are blocked. Also set the default permission mode for new sessions. Every permissions.* key below nests under this object."
       }
     },
     {
@@ -1933,6 +1933,23 @@
       }
     },
     {
+      "key": "permissions.blockWritesOutsideWorkingDirectories",
+      "path": [
+        "permissions",
+        "blockWritesOutsideWorkingDirectories"
+      ],
+      "scope": "Any file. A true in any file the session loads applies, so a repository can turn the block on for itself but can't lift yours. In a cloud session, Claude Code might not apply the key, because the file tools run in a container that is itself the boundary.",
+      "type": "Boolean",
+      "default": "unset, so writes outside the working directories follow your permission mode. The block is also on while Claude Code can't read the permissions object in your managed settings.",
+      "example": "{\n  \"permissions\": {\n    \"blockWritesOutsideWorkingDirectories\": true\n  }\n}",
+      "valueKind": "boolean",
+      "enumValues": [],
+      "description": {
+        "en": "Make the Write, Edit, and NotebookEdit tools refuse paths outside your working directories in every permission mode, including bypassPermissions, apart from some of Claude Code's own files. The key doesn't limit shell commands, MCP tools, or the programs hooks run. To limit where shell commands write, turn on sandboxing. Requires Claude Code v2.1.314 or later.",
+        "zh": "Make the Write, Edit, and NotebookEdit tools refuse paths outside your working directories in every permission mode, including bypassPermissions, apart from some of Claude Code's own files. The key doesn't limit shell commands, MCP tools, or the programs hooks run. To limit where shell commands write, turn on sandboxing. Requires Claude Code v2.1.314 or later."
+      }
+    },
+    {
       "key": "permissions.defaultMode",
       "path": [
         "permissions",
@@ -1953,8 +1970,8 @@
         "manual"
       ],
       "description": {
-        "en": "Set the permission mode new sessions start in. When you leave it unset, sessions start in the built-in default for your surface.",
-        "zh": "Set the permission mode new sessions start in. When you leave it unset, sessions start in the built-in default for your surface."
+        "en": "Set the default permission mode for new sessions. When you leave it unset, the built-in default for your surface applies.",
+        "zh": "Set the default permission mode for new sessions. When you leave it unset, the built-in default for your surface applies."
       }
     },
     {
@@ -2142,8 +2159,8 @@
         "notifications_disabled"
       ],
       "description": {
-        "en": "Choose how Claude Code notifies you when a task completes or a permission prompt is waiting. Appears in /config as Local notifications.",
-        "zh": "Choose how Claude Code notifies you when a task completes or a permission prompt is waiting. Appears in /config as Local notifications."
+        "en": "Choose how Claude Code notifies you when a task completes or a permission prompt is waiting. A mod's notifications use the same setting. Appears in /config as Local notifications.",
+        "zh": "Choose how Claude Code notifies you when a task completes or a permission prompt is waiting. A mod's notifications use the same setting. Appears in /config as Local notifications."
       }
     },
     {
@@ -2167,7 +2184,7 @@
       "path": [
         "prependPlugins"
       ],
-      "scope": "User or managed. Claude Code reads the key from managed settings. It reads the key from user settings only on a machine with no managed settings, for a user who isn't signed in with a Team or Enterprise plan. It ignores the key in project and local settings and in a --settings file.",
+      "scope": "User or managed. Claude Code reads the key from managed settings. It reads the key from user settings only on a machine with no managed settings, in a session whose credential isn't a Team or Enterprise /login. It ignores the key in project and local settings and in a --settings file.",
       "type": "array of plugin-name@marketplace-name strings",
       "default": "unset",
       "example": "{\n  \"extraKnownMarketplaces\": {\n    \"acme-tools\": {\n      \"source\": { \"source\": \"directory\", \"path\": \"/opt/acme/claude-plugins\" }\n    }\n  },\n  \"enabledPlugins\": { \"acme-guard@acme-tools\": true },\n  \"prependPlugins\": [\"acme-guard@acme-tools\", \"sec-default@builtin\"]\n}",
@@ -2348,7 +2365,7 @@
         "sandbox"
       ],
       "scope": "Any file",
-      "type": "object with enabled, failIfUnavailable, autoAllowBashIfSandboxed, excludedCommands, allowUnsandboxedCommands, enableWeakerNestedSandbox, enableWeakerNetworkIsolation, allowAppleEvents, bwrapPath, socatPath, ignoreViolations, and ripgrep, plus the filesystem, network, and credentials objects",
+      "type": "object with enabled, failIfUnavailable, autoAllowBashIfSandboxed, excludedCommands, allowUnsandboxedCommands, enableWeakerNestedSandbox, enableWeakerNetworkIsolation, allowAppleEvents, allowNestedUserNamespaces, bwrapPath, socatPath, ignoreViolations, and ripgrep, plus the filesystem, network, and credentials objects",
       "default": "unset, so Claude Code runs commands without a sandbox",
       "example": "{\n  \"sandbox\": {\n    \"enabled\": true,\n    \"autoAllowBashIfSandboxed\": true,\n    \"excludedCommands\": [\"docker *\"],\n    \"filesystem\": {\n      \"allowWrite\": [\"/tmp/build\", \"~/.kube\"],\n      \"denyRead\": [\"~/.aws/credentials\"]\n    },\n    \"network\": {\n      \"allowedDomains\": [\"github.com\", \"*.npmjs.org\"]\n    }\n  }\n}",
       "valueKind": "object",
@@ -2373,6 +2390,23 @@
       "description": {
         "en": "Let sandboxed commands on macOS send Apple Events, which open, osascript, and tools that open URLs in a browser need; without it they fail with error -600. This removes code-execution isolation: sandboxed commands can launch other applications unsandboxed with no user prompt, and can send AppleScript commands to running applications such as Terminal, subject to the per-app macOS automation-consent prompt (TCC).",
         "zh": "Let sandboxed commands on macOS send Apple Events, which open, osascript, and tools that open URLs in a browser need; without it they fail with error -600. This removes code-execution isolation: sandboxed commands can launch other applications unsandboxed with no user prompt, and can send AppleScript commands to running applications such as Terminal, subject to the per-app macOS automation-consent prompt (TCC)."
+      }
+    },
+    {
+      "key": "sandbox.allowNestedUserNamespaces",
+      "path": [
+        "sandbox",
+        "allowNestedUserNamespaces"
+      ],
+      "scope": "User or managed. A true counts from ~/.claude/settings.json, JSON passed with --settings, or managed settings. Claude Code ignores a true in a project's .claude/settings.json or .claude/settings.local.json. In a session with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set to 1, Claude Code ignores a true from every source. A false counts from any file, by settings precedence.",
+      "type": "Boolean",
+      "default": "false",
+      "example": "{\n  \"sandbox\": {\n    \"enabled\": true,\n    \"allowNestedUserNamespaces\": true\n  }\n}",
+      "valueKind": "boolean",
+      "enumValues": [],
+      "description": {
+        "en": "Let sandboxed commands on Linux and WSL2 create user namespaces, which Chromium's and Electron's own sandbox, a nested bubblewrap, and unshare need. If you set this key to true, you turn off a security boundary: code from a sandboxed command can end up running outside the sandbox. For rootless Podman or Buildah, use excludedCommands instead, because the sandbox stops them in other ways too. Requires Claude Code v2.1.305 or later.",
+        "zh": "Let sandboxed commands on Linux and WSL2 create user namespaces, which Chromium's and Electron's own sandbox, a nested bubblewrap, and unshare need. If you set this key to true, you turn off a security boundary: code from a sandboxed command can end up running outside the sandbox. For rootless Podman or Buildah, use excludedCommands instead, because the sandbox stops them in other ways too. Requires Claude Code v2.1.305 or later."
       }
     },
     {
@@ -2617,8 +2651,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Make Claude Code exit with an error at startup when sandbox.enabled is true but the sandbox can't start, because a dependency is missing or the platform is unsupported. Without this key, Claude Code runs commands unsandboxed. Managed deployments that require sandboxing as a security gate can use this setting.",
-        "zh": "Make Claude Code exit with an error at startup when sandbox.enabled is true but the sandbox can't start, because a dependency is missing or the platform is unsupported. Without this key, Claude Code runs commands unsandboxed. Managed deployments that require sandboxing as a security gate can use this setting."
+        "en": "Make Claude Code exit with an error at startup when sandbox.enabled is true but the sandbox can't start because the platform doesn't support it or the dependency check fails. Without this key, Claude Code runs commands unsandboxed. Managed deployments that require sandboxing as a security gate can use this setting.",
+        "zh": "Make Claude Code exit with an error at startup when sandbox.enabled is true but the sandbox can't start because the platform doesn't support it or the dependency check fails. Without this key, Claude Code runs commands unsandboxed. Managed deployments that require sandboxing as a security gate can use this setting."
       }
     },
     {
@@ -2742,8 +2776,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Skip filesystem isolation while keeping network isolation. Sandboxed commands get unrestricted read and write access to the host filesystem, and their network egress stays confined to network.allowedDomains. Use it when you sandbox to control where commands connect rather than what they write. Requires Claude Code v2.1.216 or later.",
-        "zh": "Skip filesystem isolation while keeping network isolation. Sandboxed commands get unrestricted read and write access to the host filesystem, and their network egress stays confined to network.allowedDomains. Use it when you sandbox to control where commands connect rather than what they write. Requires Claude Code v2.1.216 or later."
+        "en": "Skip filesystem isolation while keeping network isolation. Sandboxed commands get unrestricted read and write access to the host filesystem, and their network egress stays confined to network.allowedDomains. Use it when you sandbox to control where commands connect rather than what they write.",
+        "zh": "Skip filesystem isolation while keeping network isolation. Sandboxed commands get unrestricted read and write access to the host filesystem, and their network egress stays confined to network.allowedDomains. Use it when you sandbox to control where commands connect rather than what they write."
       }
     },
     {
@@ -2844,12 +2878,12 @@
       "scope": "Any file, with limits on project and local settings",
       "type": "array of strings, each a service name; a single trailing matches a prefix, and \"\" alone matches every service",
       "default": "unset",
-      "example": "{\n  \"sandbox\": {\n    \"network\": {\n      \"allowMachLookup\": [\"com.apple.coresimulator.*\"]\n    }\n  }\n}",
+      "example": "{\n  \"sandbox\": {\n    \"network\": {\n      \"allowMachLookup\": [\"com.apple.CoreSimulator.*\"]\n    }\n  }\n}",
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "List additional XPC and Mach service names the macOS sandbox may look up. Tools that communicate over XPC, such as the iOS Simulator or Playwright, need their services listed here.",
-        "zh": "List additional XPC and Mach service names the macOS sandbox may look up. Tools that communicate over XPC, such as the iOS Simulator or Playwright, need their services listed here."
+        "en": "List additional XPC and Mach service names the macOS sandbox may look up. Tools that communicate over XPC, such as the iOS Simulator or Playwright, need their services listed here. Sandboxed commands can reach outside the sandbox to each service that you list, and the sandbox doesn't confine what those services do for those commands.",
+        "zh": "List additional XPC and Mach service names the macOS sandbox may look up. Tools that communicate over XPC, such as the iOS Simulator or Playwright, need their services listed here. Sandboxed commands can reach outside the sandbox to each service that you list, and the sandbox doesn't confine what those services do for those commands."
       }
     },
     {
@@ -3040,8 +3074,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "See summaries of Claude's extended thinking in interactive sessions. Set it if you want the full summaries when you expand thinking with Ctrl+O. When unset or false, the Anthropic API redacts thinking blocks and Claude Code shows a collapsed stub; third-party providers don't redact.",
-        "zh": "See summaries of Claude's extended thinking in interactive sessions. Set it if you want the full summaries when you expand thinking with Ctrl+O. When unset or false, the Anthropic API redacts thinking blocks and Claude Code shows a collapsed stub; third-party providers don't redact."
+        "en": "See summaries of Claude's extended thinking in interactive sessions. Set it if you want the full summaries when you expand thinking with Ctrl+O. When unset or false, the Anthropic API redacts thinking blocks and Claude Code shows a collapsed stub.",
+        "zh": "See summaries of Claude's extended thinking in interactive sessions. Set it if you want the full summaries when you expand thinking with Ctrl+O. When unset or false, the Anthropic API redacts thinking blocks and Claude Code shows a collapsed stub."
       }
     },
     {
@@ -3240,8 +3274,8 @@
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "Add SSH connections to the Desktop environment dropdown. Administrators use it to distribute shared connections to a team. Connections you define in managed settings show as managed. Users can select them and set their own Worktree folder for them, but can't edit anything else or delete them in the app.",
-        "zh": "Add SSH connections to the Desktop environment dropdown. Administrators use it to distribute shared connections to a team. Connections you define in managed settings show as managed. Users can select them and set their own Worktree folder for them, but can't edit anything else or delete them in the app."
+        "en": "Add SSH connections to the Desktop environment selector. Administrators use sshConfigs to distribute shared connections to a team. Users can select a managed connection and set their own Worktree folder for it. They can't edit its other fields or delete it in the app.",
+        "zh": "Add SSH connections to the Desktop environment selector. Administrators use sshConfigs to distribute shared connections to a team. Users can select a managed connection and set their own Worktree folder for it. They can't edit its other fields or delete it in the app."
       }
     },
     {
@@ -3258,6 +3292,22 @@
       "description": {
         "en": "Limit the hosts a Desktop SSH session can connect to. Only the Desktop app reads this key; the CLI doesn't. Patterns are case-insensitive: matches any host, .example.com matches example.com and every subdomain, and anything else is an exact match against the hostname after ~/.ssh/config resolution. An empty array turns SSH sessions off.",
         "zh": "Limit the hosts a Desktop SSH session can connect to. Only the Desktop app reads this key; the CLI doesn't. Patterns are case-insensitive: matches any host, .example.com matches example.com and every subdomain, and anything else is an exact match against the hostname after ~/.ssh/config resolution. An empty array turns SSH sessions off."
+      }
+    },
+    {
+      "key": "sshHostCommands",
+      "path": [
+        "sshHostCommands"
+      ],
+      "scope": "User or managed. Only the desktop app reads this key. It reads managed entries from one managed settings file or MDM policy on the computer, and ignores the key in server-managed settings.",
+      "type": "array of objects, each with required id, name, and command and optional sshIdentityFile and startDirectory. Desktop doesn't read command as shell syntax, so pipes and variables don't work: write it as a program and its arguments.",
+      "default": "unset",
+      "example": "{\n  \"sshHostCommands\": [\n    {\n      \"id\": \"devbox\",\n      \"name\": \"Dev box\",\n      \"command\": \"acme-dev create\"\n    }\n  ]\n}",
+      "valueKind": "array",
+      "enumValues": [],
+      "description": {
+        "en": "Add SSH connections whose host comes from a command to the Desktop environment selector. When you create a connection or create another machine for it, Desktop runs the entry's command on your computer and connects to the host that the command prints.",
+        "zh": "Add SSH connections whose host comes from a command to the Desktop environment selector. When you create a connection or create another machine for it, Desktop runs the entry's command on your computer and connects to the host that the command prints."
       }
     },
     {
@@ -3321,8 +3371,8 @@
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "Lock the agents surface. Claude Code stops loading agents from ~/.claude/agents/, .claude/agents/, and --add-dir directories. It keeps loading plugin agents, built-in agents, and agents in the managed policy directory.",
-        "zh": "Lock the agents surface. Claude Code stops loading agents from ~/.claude/agents/, .claude/agents/, and --add-dir directories. It keeps loading plugin agents, built-in agents, and agents in the managed policy directory."
+        "en": "Lock the agents surface. Claude Code stops loading agents from ~/.claude/agents/, .claude/agents/, and --add-dir directories. It keeps loading built-in agents, agents in the managed policy directory, and agents from plugins other than skills-directory plugins.",
+        "zh": "Lock the agents surface. Claude Code stops loading agents from ~/.claude/agents/, .claude/agents/, and --add-dir directories. It keeps loading built-in agents, agents in the managed policy directory, and agents from plugins other than skills-directory plugins."
       }
     },
     {
@@ -3338,8 +3388,8 @@
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "Lock the hooks surface. Claude Code stops running hooks from user, project, and local settings.json, and keeps running plugin hooks and hooks in managed settings.",
-        "zh": "Lock the hooks surface. Claude Code stops running hooks from user, project, and local settings.json, and keeps running plugin hooks and hooks in managed settings."
+        "en": "Lock the hooks surface:",
+        "zh": "Lock the hooks surface:"
       }
     },
     {
@@ -3355,8 +3405,8 @@
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "Lock the mcp surface. Claude Code stops loading MCP servers from ~/.claude.json and .mcp.json, and keeps loading plugin MCP servers, managed-mcp.json servers, and servers from managedMcpServers.",
-        "zh": "Lock the mcp surface. Claude Code stops loading MCP servers from ~/.claude.json and .mcp.json, and keeps loading plugin MCP servers, managed-mcp.json servers, and servers from managedMcpServers."
+        "en": "Lock the mcp surface. Claude Code stops loading MCP servers from ~/.claude.json and .mcp.json. It keeps loading managed-mcp.json servers, servers from managedMcpServers, and MCP servers from plugins other than skills-directory plugins.",
+        "zh": "Lock the mcp surface. Claude Code stops loading MCP servers from ~/.claude.json and .mcp.json. It keeps loading managed-mcp.json servers, servers from managedMcpServers, and MCP servers from plugins other than skills-directory plugins."
       }
     },
     {
@@ -3372,8 +3422,8 @@
       "valueKind": "array",
       "enumValues": [],
       "description": {
-        "en": "Lock the skills surface. Claude Code stops loading skills from ~/.claude/skills/ and .claude/skills/, custom commands from ~/.claude/commands/ and .claude/commands/, skills and commands under --add-dir directories, and skills synced from your claude.ai account. It keeps loading plugin skills, bundled skills, and skills in the managed policy directory.",
-        "zh": "Lock the skills surface. Claude Code stops loading skills from ~/.claude/skills/ and .claude/skills/, custom commands from ~/.claude/commands/ and .claude/commands/, skills and commands under --add-dir directories, and skills synced from your claude.ai account. It keeps loading plugin skills, bundled skills, and skills in the managed policy directory."
+        "en": "Lock the skills surface. Claude Code stops loading skills from ~/.claude/skills/ and .claude/skills/, custom commands from ~/.claude/commands/ and .claude/commands/, skills and commands under --add-dir directories, and skills synced from your claude.ai account. It keeps loading bundled skills, skills in the managed policy directory, and skills from plugins other than skills-directory plugins.",
+        "zh": "Lock the skills surface. Claude Code stops loading skills from ~/.claude/skills/ and .claude/skills/, custom commands from ~/.claude/commands/ and .claude/commands/, skills and commands under --add-dir directories, and skills synced from your claude.ai account. It keeps loading bundled skills, skills in the managed policy directory, and skills from plugins other than skills-directory plugins."
       }
     },
     {
@@ -3487,8 +3537,8 @@
       "valueKind": "string",
       "enumValues": [],
       "description": {
-        "en": "Through v2.1.276, you set this key to the number of characters of a background task's output that Claude received inline when it read the task with the TaskOutput tool.",
-        "zh": "Through v2.1.276, you set this key to the number of characters of a background task's output that Claude received inline when it read the task with the TaskOutput tool."
+        "en": "> [!WARNING] > > Removed in v2.1.277, together with the TaskOutput tool it sized. Setting it has no effect on current versions. Claude reads a background task's output file with Read instead.",
+        "zh": "> [!WARNING] > > Removed in v2.1.277, together with the TaskOutput tool it sized. Setting it has no effect on current versions. Claude reads a background task's output file with Read instead."
       }
     },
     {
@@ -3705,8 +3755,8 @@
       "valueKind": "object",
       "enumValues": [],
       "description": {
-        "en": "Map two-key INSERT-mode sequences to Escape in vim editor mode. Each key is exactly two printable characters typed in sequence, and \"\" is the only supported target; Claude Code ignores other entries. Requires Claude Code v2.1.208 or later.",
-        "zh": "Map two-key INSERT-mode sequences to Escape in vim editor mode. Each key is exactly two printable characters typed in sequence, and \"\" is the only supported target; Claude Code ignores other entries. Requires Claude Code v2.1.208 or later."
+        "en": "Map two-key INSERT-mode sequences to Escape in vim editor mode. Each key is exactly two printable characters typed in sequence, and \"\" is the only supported target; Claude Code ignores other entries.",
+        "zh": "Map two-key INSERT-mode sequences to Escape in vim editor mode. Each key is exactly two printable characters typed in sequence, and \"\" is the only supported target; Claude Code ignores other entries."
       }
     },
     {
@@ -3740,8 +3790,8 @@
       "valueKind": "boolean",
       "enumValues": [],
       "description": {
-        "en": "Turn voice dictation on with the single Boolean form that predates the voice object. When both are set, voice.enabled applies.",
-        "zh": "Turn voice dictation on with the single Boolean form that predates the voice object. When both are set, voice.enabled applies."
+        "en": "> [!WARNING] > > Deprecated since v2.1.92, when the voice object replaced it. Claude Code still reads it so older settings files keep working, but new configurations should set voice.enabled.",
+        "zh": "> [!WARNING] > > Deprecated since v2.1.92, when the voice object replaced it. Claude Code still reads it so older settings files keep working, but new configurations should set voice.enabled."
       }
     },
     {
@@ -3793,8 +3843,8 @@
         "large"
       ],
       "description": {
-        "en": "Set the agent count Claude aims for in the dynamic workflows it writes. Claude Code sends the value to Claude as advice, not an enforced cap: \"small\" asks for fewer than 5 agents, \"medium\" fewer than 10, and \"large\" fewer than 50. Choose \"small\" when you want to bound what a workflow spends. Requires Claude Code v2.1.219 or later.",
-        "zh": "Set the agent count Claude aims for in the dynamic workflows it writes. Claude Code sends the value to Claude as advice, not an enforced cap: \"small\" asks for fewer than 5 agents, \"medium\" fewer than 10, and \"large\" fewer than 50. Choose \"small\" when you want to bound what a workflow spends. Requires Claude Code v2.1.219 or later."
+        "en": "Set the agent count Claude aims for in the dynamic workflows it writes. Claude Code sends the value to Claude as advice, not an enforced cap: \"small\" asks for fewer than 5 agents, \"medium\" fewer than 10, and \"large\" fewer than 50. Choose \"small\" when you want to bound what a workflow spends.",
+        "zh": "Set the agent count Claude aims for in the dynamic workflows it writes. Claude Code sends the value to Claude as advice, not an enforced cap: \"small\" asks for fewer than 5 agents, \"medium\" fewer than 10, and \"large\" fewer than 50. Choose \"small\" when you want to bound what a workflow spends."
       }
     },
     {
@@ -3879,7 +3929,7 @@
       "scope": "Any file",
       "type": "array of strings, directory paths relative to the repository root",
       "default": "unset, so each worktree checks out the whole tree",
-      "example": "{\n  \"worktree\": {\n    \"sparsePaths\": [\"packages/my-app\", \"shared/utils\"]\n  }\n}",
+      "example": "{\n  \"worktree\": {\n    \"sparsePaths\": [\".claude\", \"packages/my-app\", \"shared/utils\"]\n  }\n}",
       "valueKind": "array",
       "enumValues": [],
       "description": {
@@ -3927,8 +3977,8 @@
       "example": "sk-...",
       "valueKind": "string",
       "description": {
-        "en": "API key sent as X-Api-Key header. When set, this key is used instead of your Claude Pro, Max, Team, or Enterprise subscription even if you are logged in. In non-interactive mode (-p), the key is always used when present. In interactive mode, you are prompted to approve the key once before it overrides your subscription. To use your subscription instead, run unset ANTHROPIC_API_KEY",
-        "zh": "作为 X-Api-Key 标头发送的 API 密钥。设置后，即使您已登录，也会使用此密钥，而不是您的 Claude Pro、Max、Team 或 Enterprise 订阅。在非交互模式（-p）下，只要存在该密钥就始终使用。在交互模式下，系统会提示您批准该密钥一次，之后它才会覆盖您的订阅。若要改用您的订阅，请运行 unset ANTHROPIC_API_KEY"
+        "en": "API key sent as X-Api-Key header. When set, this key is used instead of your Claude Pro, Max, Ultra, Team, or Enterprise subscription even if you are logged in. In non-interactive mode (-p), the key is always used when present. In interactive mode, you are prompted to approve the key once before it overrides your subscription. To use your subscription instead, run unset ANTHROPIC_API_KEY",
+        "zh": "作为 X-Api-Key 标头发送的 API 密钥。设置后，即使您已登录，也会使用此密钥，而不是您的 Claude Pro、Max、Ultra、Team 或 Enterprise 订阅。在非交互模式（-p）下，只要存在该密钥就始终会使用它。在交互模式下，系统会提示您批准一次该密钥，之后它才会覆盖您的订阅。如需改用您的订阅，请运行 unset ANTHROPIC_API_KEY"
       }
     },
     {
@@ -3972,8 +4022,8 @@
       "example": "https://example.com",
       "valueKind": "string",
       "description": {
-        "en": "Override the API endpoint to route requests through a proxy or gateway. When set to a non-first-party host, MCP tool search is disabled by default. Set ENABLE_TOOL_SEARCH=true if your proxy forwards tool_reference blocks. As of v2.1.196, Remote Control is disabled when this points at a host other than api.anthropic.com, matching its behavior on Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry",
-        "zh": "覆盖 API 端点，以通过代理或网关路由请求。当设置为非第一方主机时，MCP 工具搜索默认禁用。如果您的代理会转发 tool_reference 块，请设置 ENABLE_TOOL_SEARCH=true。自 v2.1.196 起，当此变量指向 api.anthropic.com 以外的主机时，Remote Control 会被禁用，与其在 Amazon Bedrock、Google Cloud's Agent Platform 和 Microsoft Foundry 上的行为一致"
+        "en": "Override the API endpoint to route requests through a proxy or gateway. For what happens when that gateway rejects MCP tool search, see Tool search through an LLM gateway. As of v2.1.196, Remote Control is disabled when this points at a host other than api.anthropic.com, matching its behavior on Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry",
+        "zh": "覆盖 API 端点，以通过代理或网关路由请求。关于该网关拒绝 MCP 工具搜索时会发生什么，请参阅通过 LLM 网关进行工具搜索。自 v2.1.196 起，当此变量指向 api.anthropic.com 以外的主机时，Remote Control 会被禁用，与其在 Amazon Bedrock、Google Cloud's Agent Platform 和 Microsoft Foundry 上的行为一致"
       }
     },
     {
@@ -4008,8 +4058,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "Amazon Bedrock service tier (default, flex, or priority). Sent as the X-Amzn-Bedrock-Service-Tier header. See Amazon Bedrock",
-        "zh": "Amazon Bedrock 服务层级（default、flex 或 priority）。作为 X-Amzn-Bedrock-Service-Tier 标头发送。请参阅 Amazon Bedrock"
+        "en": "Amazon Bedrock service tier (default, flex, or priority). See Amazon Bedrock",
+        "zh": "Amazon Bedrock 服务层级（default、flex 或 priority）。请参阅 Amazon Bedrock"
       }
     },
     {
@@ -4347,11 +4397,11 @@
     },
     {
       "key": "API_TIMEOUT_MS",
-      "example": "300000",
-      "valueKind": "number-string",
+      "example": "0",
+      "valueKind": "boolean-string",
       "description": {
-        "en": "Timeout for API requests in milliseconds (default: 600000, or 10 minutes; maximum: 2147483647). A streaming request has to receive its response headers within it. Increase this when requests time out on slow networks or when routing through a proxy",
-        "zh": "API 请求的超时时间，以毫秒为单位（默认：600000，即 10 分钟；最大值：2147483647）。流式请求必须在此时间内收到响应头。当请求在慢速网络上或通过代理路由时超时，请增大此值"
+        "en": "Time in milliseconds that each API request attempt has to receive its response headers. It doesn't limit how long a streaming response runs after that. The default is 600000, or 10 minutes, and the maximum is 2147483647. When you set a positive value, each attempt at a non-streaming request has to finish within it. Increase this when requests time out on slow networks or when routing through a proxy. Set to 0 to remove this limit, which requires Claude Code v2.1.305 or later. With 0, a non-streaming attempt still times out after 300 seconds in a local session",
+        "zh": "每次 API 请求尝试接收响应标头的时间，以毫秒为单位。它不限制流式响应在此之后运行的时长。默认值为 600000（即 10 分钟），最大值为 2147483647。当您设置正值时，每次非流式请求尝试都必须在此时间内完成。当请求在慢速网络上或通过代理路由时超时，请增大此值。设置为 0 可移除此限制，这需要 Claude Code v2.1.305 或更高版本。设置为 0 时，在本地会话中非流式尝试仍会在 300 秒后超时"
       }
     },
     {
@@ -4409,24 +4459,6 @@
       }
     },
     {
-      "key": "CLAUDE_AFK_COUNTDOWN_MS",
-      "example": "20000",
-      "valueKind": "number-string",
-      "description": {
-        "en": "How many milliseconds before auto-continue the on-screen countdown appears on an unanswered AskUserQuestion dialog. Default 20000 (20 seconds), capped at the auto-continue timeout. Has no effect unless auto-continue is on; see the askUserQuestionTimeout setting and CLAUDE_AFK_TIMEOUT_MS. Ignored in project and local settings. Requires Claude Code v2.1.198 or later",
-        "zh": "未回答的 AskUserQuestion 对话框在自动继续前多少毫秒显示屏幕倒计时。默认 20000（20 秒），上限为自动继续超时时间。除非启用了自动继续，否则不起作用；请参阅 askUserQuestionTimeout 设置和 CLAUDE_AFK_TIMEOUT_MS。在项目和本地设置中会被忽略。需要 Claude Code v2.1.198 或更高版本"
-      }
-    },
-    {
-      "key": "CLAUDE_AFK_TIMEOUT_MS",
-      "example": "0",
-      "valueKind": "boolean-string",
-      "description": {
-        "en": "How many milliseconds of idle time before an unanswered AskUserQuestion dialog auto-continues without you. Auto-continue is off by default; opt in with the askUserQuestionTimeout setting. This variable is an override for demos and automated tests: when set, it takes precedence over that setting and turns auto-continue on even when the setting is unset or never. Setting 0 doesn't turn the timeout off; it closes the dialog immediately. Ignored in project and local settings. Before v2.1.200, auto-continue was on by default with a 60000 (60 seconds) timeout. Requires Claude Code v2.1.198 or later",
-        "zh": "未回答的 AskUserQuestion 对话框在空闲多少毫秒后无需您参与即自动继续。自动继续默认关闭；可通过 askUserQuestionTimeout 设置选择启用。此变量是用于演示和自动化测试的覆盖项：设置后，它优先于该设置，即使该设置未设置或为 never，也会启用自动继续。设置 0 不会关闭超时，而是会立即关闭对话框。在项目和本地设置中会被忽略。在 v2.1.200 之前，自动继续默认启用，超时时间为 60000（60 秒）。需要 Claude Code v2.1.198 或更高版本"
-      }
-    },
-    {
       "key": "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
       "example": "1",
       "valueKind": "boolean-string",
@@ -4476,8 +4508,8 @@
       "example": "0",
       "valueKind": "boolean-string",
       "description": {
-        "en": "In screen reader mode, how many milliseconds Claude Code waits before it writes a new or changed line. Default 0, so Claude Code doesn't wait. Before v2.1.287, the default was 50. Claude Code caps the wait at 5000. Requires Claude Code v2.1.233 or later",
-        "zh": "在屏幕阅读器模式下，Claude Code 在写入新行或已更改的行之前等待的毫秒数。默认 0，因此 Claude Code 不会等待。在 v2.1.287 之前，默认值为 50。Claude Code 将等待时间上限设为 5000。需要 Claude Code v2.1.233 或更高版本"
+        "en": "In screen reader mode, how many milliseconds Claude Code waits before it writes a new or changed line. Default 0, so Claude Code doesn't wait. Before v2.1.287, the default was 50. Claude Code caps the wait at 5000. Ignored in project and local settings. Requires Claude Code v2.1.233 or later",
+        "zh": "在屏幕阅读器模式下，Claude Code 在写入新行或已更改的行之前等待的毫秒数。默认值为 0，因此 Claude Code 不会等待。在 v2.1.287 之前，默认值为 50。Claude Code 将等待时间上限设为 5000。在项目设置和本地设置中会被忽略。需要 Claude Code v2.1.233 或更高版本"
       }
     },
     {
@@ -4485,8 +4517,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to render screen-reader friendly output: flat text without decorative borders or animations. Set to 0 to force screen-reader mode off even when axScreenReader is true. The --ax-screen-reader flag takes precedence. Requires Claude Code v2.1.181 or later",
-        "zh": "设置为 1 可渲染适合屏幕阅读器的输出：不带装饰性边框或动画的纯文本。设置为 0 可强制关闭屏幕阅读器模式，即使 axScreenReader 为 true。--ax-screen-reader 标志优先。需要 Claude Code v2.1.181 或更高版本"
+        "en": "Set to 1 to render screen-reader friendly output: flat text without decorative borders or animations. Set to 0 to force screen-reader mode off even when axScreenReader is true. The --ax-screen-reader flag takes precedence. Ignored in project and local settings. Requires Claude Code v2.1.181 or later",
+        "zh": "设置为 1 可渲染适合屏幕阅读器的输出：不带装饰性边框或动画的纯文本。设置为 0 可强制关闭屏幕阅读器模式，即使 axScreenReader 为 true。--ax-screen-reader 标志的优先级更高。在项目设置和本地设置中会被忽略。需要 Claude Code v2.1.181 或更高版本"
       }
     },
     {
@@ -4494,8 +4526,8 @@
       "example": "0",
       "valueKind": "boolean-string",
       "description": {
-        "en": "In screen reader mode, how many milliseconds Claude Code holds the first interface render after the startup confirmation line, so your screen reader can speak the line in full before new output interrupts it. Default 3000. Set 0 to render immediately. Claude Code caps the hold at 600000 (10 minutes). Your first keystroke ends the hold early. Requires Claude Code v2.1.217 or later",
-        "zh": "在屏幕阅读器模式下，Claude Code 在启动确认行之后暂缓首次界面渲染的毫秒数，以便您的屏幕阅读器在新输出打断之前完整朗读该行。默认 3000。设置 0 可立即渲染。Claude Code 将暂缓时间上限设为 600000（10 分钟）。您的第一次按键会提前结束暂缓。需要 Claude Code v2.1.217 或更高版本"
+        "en": "In screen reader mode, how many milliseconds Claude Code holds the first interface render after the startup confirmation line. Your screen reader can then speak the line in full before new output interrupts it. Default 3000. Set 0 to render immediately. Claude Code caps the hold at 600000 (10 minutes). Your first keystroke ends the hold early. Ignored in project and local settings. Requires Claude Code v2.1.217 or later",
+        "zh": "在屏幕阅读器模式下，Claude Code 在启动确认行之后推迟首次界面渲染的毫秒数。这样您的屏幕阅读器就可以在新输出打断之前完整朗读该行。默认值为 3000。设置为 0 可立即渲染。Claude Code 将推迟时间上限设为 600000（10 分钟）。您的第一次按键会提前结束推迟。在项目设置和本地设置中会被忽略。需要 Claude Code v2.1.217 或更高版本"
       }
     },
     {
@@ -4629,8 +4661,8 @@
       "example": "100000",
       "valueKind": "number-string",
       "description": {
-        "en": "Set the auto-compact window in tokens, from 100000 to 1000000. Accepts a plain integer such as 500000 only: a value like 500k reads as 500 and clamps to the 100K minimum. The effective window is also capped at the model's context window. Takes precedence over the /autocompact command, the --autocompact flag, and the autoCompactWindow setting. The status line's used_percentage always measures against the model's full context window, so once this variable is set, that percentage no longer indicates when compaction will run",
-        "zh": "以 token 为单位设置自动压缩窗口，范围为 100000 到 1000000。仅接受纯整数，例如 500000：像 500k 这样的值会被读取为 500，并被限制为 100K 的最小值。有效窗口的上限还受模型上下文窗口限制。优先于 /autocompact 命令、--autocompact 标志和 autoCompactWindow 设置。状态栏的 used_percentage 始终以模型的完整上下文窗口为基准进行衡量，因此一旦设置此变量，该百分比将不再指示何时会运行压缩"
+        "en": "Set the auto-compact window, how full the context gets before compaction, from 100000 to 1000000 tokens. Suffixed values such as 200k require v2.1.304 or later. For precedence over the other ways to set the window and the effect on the status line's used_percentage, see Set the auto-compact window",
+        "zh": "设置自动压缩窗口，即上下文填充到多满时进行压缩，范围为 100000 到 1000000 个 token。带后缀的值（如 200k）需要 v2.1.304 或更高版本。关于它与设置该窗口的其他方式之间的优先级，以及它对状态栏 used_percentage 的影响，请参阅设置自动压缩窗口"
       }
     },
     {
@@ -4640,6 +4672,15 @@
       "description": {
         "en": "Override automatic IDE connection. By default, Claude Code connects automatically when launched inside a supported IDE's integrated terminal. Set to false to prevent this. Set to true to force a connection attempt when auto-detection fails, such as when tmux obscures the parent terminal. Takes precedence over the autoConnectIde global config setting",
         "zh": "覆盖自动 IDE 连接。默认情况下，在受支持 IDE 的集成终端中启动时，Claude Code 会自动连接。设置为 false 可阻止此行为。设置为 true 可在自动检测失败时强制尝试连接，例如当 tmux 遮蔽了父终端时。优先于 autoConnectIde 全局配置设置"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_AUTO_MODE_MODEL",
+      "example": "claude-sonnet-4-6",
+      "valueKind": "string",
+      "description": {
+        "en": "Sets the model for the classifier requests Claude Code sends in auto mode. Use a full model ID such as claude-sonnet-4-6. For the cases where Claude Code ignores it, see Choose the classifier model. Requires Claude Code v2.1.302 or later",
+        "zh": "设置 Claude Code 在自动模式下发送的分类器请求所使用的模型。请使用完整的模型 ID，例如 claude-sonnet-4-6。有关 Claude Code 会忽略它的情况，请参阅选择分类器模型。需要 Claude Code v2.1.302 或更高版本"
       }
     },
     {
@@ -4746,8 +4787,8 @@
       "example": "300000",
       "valueKind": "number-string",
       "description": {
-        "en": "Removed in v2.1.186 and now a no-op. Previously set a separate timeout for the connect, TLS, and response-header phase of a streaming API request. Use API_TIMEOUT_MS for the per-request timeout. For the response-header phase of a streaming request, see CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS",
-        "zh": "已在 v2.1.186 中移除，现在不起任何作用。以前用于为流式 API 请求的连接、TLS 和响应标头阶段单独设置超时时间。请使用 API_TIMEOUT_MS 设置每个请求的超时时间。有关流式请求的响应标头阶段，请参阅 CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS"
+        "en": "Removed in v2.1.186 and now a no-op. Previously set a separate timeout for the connect, TLS, and response-header phase of a streaming API request. Use API_TIMEOUT_MS instead. For the response-header phase of a streaming request, see CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS",
+        "zh": "已在 v2.1.186 中移除，现在不起作用。以前用于为流式 API 请求的连接、TLS 和响应标头阶段设置单独的超时。请改用 API_TIMEOUT_MS。关于流式请求的响应标头阶段，请参阅 CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS"
       }
     },
     {
@@ -4784,15 +4825,6 @@
       "description": {
         "en": "Set to 1 to disable adaptive reasoning on Opus 4.6 and Sonnet 4.6 and fall back to the fixed thinking budget controlled by MAX_THINKING_TOKENS. Has no effect on Fable models, Sonnet 5 and later, Haiku 5.5, or Opus 4.7 and later, which always use adaptive reasoning",
         "zh": "设置为 1 可在 Opus 4.6 和 Sonnet 4.6 上禁用自适应推理，并回退到由 MAX_THINKING_TOKENS 控制的固定思考预算。对 Fable 模型、Sonnet 5 及更高版本、Haiku 5.5 或 Opus 4.7 及更高版本不起作用，这些模型始终使用自适应推理"
-      }
-    },
-    {
-      "key": "CLAUDE_CODE_DISABLE_ADMIN_ENV_UNION",
-      "example": "1",
-      "valueKind": "boolean-string",
-      "description": {
-        "en": "Set to 1 to stop Claude Code from merging managed settings env blocks per key across admin sources, so only the highest-priority source's whole env block applies, as before v2.1.223. Set it in the environment that launches Claude Code, since Claude Code ignores a copy delivered through a settings env block. Requires Claude Code v2.1.223 or later",
-        "zh": "设置为 1 可阻止 Claude Code 跨管理员来源按键合并托管设置 env 块，从而仅应用最高优先级来源的整个 env 块，与 v2.1.223 之前相同。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略通过设置 env 块传递的副本。需要 Claude Code v2.1.223 或更高版本"
       }
     },
     {
@@ -4863,8 +4895,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to disable all background task functionality, including the run_in_background parameter on Bash and subagent tools, auto-backgrounding, and the Ctrl+B shortcut",
-        "zh": "设置为 1 可禁用所有后台任务功能，包括 Bash 和子代理工具上的 run_in_background 参数、自动后台化以及 Ctrl+B 快捷键"
+        "en": "Set to 1 to remove the run_in_background parameter from the Bash, PowerShell, and subagent tools and to turn off the Ctrl+B shortcut and background runs of forked skills. Claude Code then also stops moving subagents, long MCP tool calls, and timed-out shell commands to the background automatically. MCP tasks and the Monitor tool still run in the background. To turn off background sessions too, set CLAUDE_CODE_DISABLE_AGENT_VIEW to 1",
+        "zh": "设置为 1 可从 Bash、PowerShell 和子代理工具中移除 run_in_background 参数，并关闭 Ctrl+B 快捷键以及分叉 skill 的后台运行。Claude Code 随后也会停止自动将子代理、长时间 MCP 工具调用和超时的 shell 命令移至后台。MCP 任务和 Monitor 工具仍会在后台运行。若要同时关闭后台会话，请将 CLAUDE_CODE_DISABLE_AGENT_VIEW 设置为 1"
       }
     },
     {
@@ -4890,8 +4922,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to stop a background session's running background shell commands, dynamic workflows, and, as of v2.1.198, background subagents when the supervisor stops, restarts, or updates that session's process, instead of handing them to the session's next process. Affects only that handoff: backgrounding a session with ← or /background still carries in-flight background work over, and CLAUDE_DISABLE_ADOPT turns off both. Requires Claude Code v2.1.196 or later",
-        "zh": "设置为 1 后，当 supervisor 停止、重启或更新后台会话的进程时，该会话正在运行的后台 shell 命令、动态工作流以及（从 v2.1.198 起）后台子代理会被停止，而不是移交给该会话的下一个进程。仅影响该移交：使用 ← 或 /background 将会话转入后台时，仍会保留正在进行的后台工作，而 CLAUDE_DISABLE_ADOPT 会同时关闭这两者。需要 Claude Code v2.1.196 或更高版本"
+        "en": "Set to 1 to stop a background session's in-flight work when the supervisor stops, restarts, or updates that session's process, instead of handing it to the session's next process. That work is the session's running background shell commands, plus background subagents as of v2.1.198. Affects only that handoff: backgrounding a session with ← or /background still carries in-flight background work over. Requires Claude Code v2.1.196 or later",
+        "zh": "设置为 1 可在监督进程停止、重启或更新某个后台会话的进程时，停止该会话正在进行的工作，而不是将其移交给该会话的下一个进程。这些工作是该会话正在运行的后台 shell 命令，自 v2.1.198 起还包括后台子代理。仅影响该移交：使用 ← 或 /background 将会话转入后台时，仍会将正在进行的后台工作延续过去。需要 Claude Code v2.1.196 或更高版本"
       }
     },
     {
@@ -4901,6 +4933,15 @@
       "description": {
         "en": "Set to 1 to stop Claude Code from terminating background shell commands under memory pressure. By default, on macOS and Linux, Claude Code terminates background shells when the operating system reports critical memory pressure and the session has been idle for 30 minutes with no turn or subagent running. Windows has no memory-pressure signal, so this variable has no effect there. Requires Claude Code v2.1.193 or later",
         "zh": "设置为 1 可阻止 Claude Code 在内存压力下终止后台 shell 命令。默认情况下，在 macOS 和 Linux 上，当操作系统报告严重内存压力，且会话已空闲 30 分钟、没有轮次或子代理在运行时，Claude Code 会终止后台 shell。Windows 没有内存压力信号，因此此变量在 Windows 上不起作用。需要 Claude Code v2.1.193 或更高版本"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_DISABLE_BG_STABLE_PATH",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "On macOS with the native installer, set to 1 to run each background session's host process from the installed binary, not ~/.local/share/claude/ClaudeCode.app. macOS may then ask again for permissions such as folder access, including after each update. Set it in the env block of user settings, a managed settings file, or an MDM policy, not your shell. To remove ClaudeCode.app, delete it yourself. Requires Claude Code v2.1.295 or later",
+        "zh": "在使用原生安装程序的 macOS 上，设置为 1 可从已安装的二进制文件运行每个后台会话的宿主进程，而不是从 ~/.local/share/claude/ClaudeCode.app 运行。macOS 随后可能会再次请求文件夹访问等权限，包括在每次更新之后。请在用户设置、托管设置文件或 MDM 策略的 env 块中设置它，而不是在 shell 中设置。要移除 ClaudeCode.app，请自行删除。需要 Claude Code v2.1.295 或更高版本"
       }
     },
     {
@@ -4917,8 +4958,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to keep the Claude in Chrome browser tools available while omitting the Chrome section of the system prompt and the /claude-in-chrome bundled skill. For hosts that embed Claude Code and supply their own browser guidance. Requires Claude Code v2.1.257 or later",
-        "zh": "设置为 1 可保留 Claude in Chrome 浏览器工具可用，同时省略系统提示词中的 Chrome 部分以及 /claude-in-chrome 随附 skill。适用于嵌入 Claude Code 并提供自己的浏览器指导的宿主。需要 Claude Code v2.1.257 或更高版本"
+        "en": "For hosts that embed Claude Code and supply their own browser guidance. Set to 1 to keep the Claude in Chrome browser tools available while omitting the Chrome section of the system prompt and the /claude-in-chrome bundled skill. In VS Code, the extension at v2.1.314 or later also leaves the Claude in Chrome instructions out of a session's messages. Requires Claude Code v2.1.257 or later",
+        "zh": "适用于嵌入 Claude Code 并提供自己的浏览器指导的宿主。设置为 1 可在保留 Claude in Chrome 浏览器工具可用的同时，省略系统提示词中的 Chrome 部分以及 /claude-in-chrome 随附 skill。在 VS Code 中，v2.1.314 或更高版本的扩展还会将 Claude in Chrome 指令排除在会话消息之外。需要 Claude Code v2.1.257 或更高版本"
       }
     },
     {
@@ -4935,8 +4976,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to disable scheduled tasks. The /loop skill and cron tools become unavailable and any already-scheduled tasks stop firing, including tasks that are already running mid-session",
-        "zh": "设置为 1 可禁用定时任务。/loop skill 和 cron 工具将不可用，任何已安排的任务都会停止触发，包括在会话中途已经在运行的任务"
+        "en": "Set to 1 to disable session-scoped scheduled tasks. The /loop skill and cron tools become unavailable and any already-scheduled tasks stop firing, including tasks that are already running mid-session",
+        "zh": "设置为 1 可禁用会话范围的定时任务。/loop skill 和 cron 工具将不可用，所有已安排的任务都会停止触发，包括会话中途已在运行的任务"
       }
     },
     {
@@ -4944,8 +4985,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to turn off the time limit on critical-path removal prompts. In auto mode Claude Code then sends these removals to the classifier instead, and in bypassPermissions mode the prompt waits for your answer. Set it in the environment that launches Claude Code, since Claude Code ignores a copy delivered through a settings env block. Requires Claude Code v2.1.281 or later",
-        "zh": "设置为 1 可关闭关键路径删除提示的时间限制。随后在 auto 模式下，Claude Code 会改为将这些删除操作发送给分类器；在 bypassPermissions 模式下，提示会等待您的回答。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略通过设置 env 块传递的副本。需要 Claude Code v2.1.281 或更高版本"
+        "en": "Set to 1 to turn off the auto and bypassPermissions time limit and denials on critical-path removals. These removals then go to the classifier in auto mode, and get an untimed prompt in bypassPermissions mode wherever Claude Code can show one. Set it in the environment that launches Claude Code, since Claude Code ignores a copy delivered through a settings env block. Requires Claude Code v2.1.281 or later",
+        "zh": "设为 1 可关闭 auto 和 bypassPermissions 模式下针对关键路径删除操作的时间限制和拒绝。这些删除操作随后在 auto 模式下交由分类器处理，在 bypassPermissions 模式下，只要 Claude Code 能够显示提示，就会显示不限时的提示。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略通过设置 env 块传递的副本。需要 Claude Code v2.1.281 或更高版本"
       }
     },
     {
@@ -5030,12 +5071,30 @@
       }
     },
     {
+      "key": "CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 so that Claude waits for the result of an MCP task in an interactive session. While automatic backgrounding is on, it still moves the call to the background after two minutes by default. Requires Claude Code v2.1.304 or later",
+        "zh": "设置为 1 可让 Claude 在交互会话中等待 MCP 任务的结果。当自动后台化开启时，默认情况下它仍会在两分钟后将该调用移至后台。需要 Claude Code v2.1.304 或更高版本"
+      }
+    },
+    {
       "key": "CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK",
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
         "en": "Set to 1 to stop Claude Code on Amazon Bedrock and Google Cloud's Agent Platform from switching to an older model when your account loses access to a session's model mid-session; the refused request fails at once instead. A fallback model chain you configure still switches on that refusal, and the startup model checks still fall back at launch. Requires Claude Code v2.1.285 or later",
         "zh": "设置为 1 可阻止 Amazon Bedrock 和 Google Cloud's Agent Platform 上的 Claude Code 在您的账户于会话中途失去对会话模型的访问权限时切换到较旧的模型；被拒绝的请求会立即失败。您配置的备用模型链仍会在该拒绝发生时切换，启动模型检查仍会在启动时回退。需要 Claude Code v2.1.285 或更高版本"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 to turn off the mounted drive prompt for paths such as /Volumes/USB. Set it in the environment that launches Claude Code, because Claude Code ignores it in a settings env block. Requires Claude Code v2.1.304 or later",
+        "zh": "设置为 1 可关闭针对 /Volumes/USB 等路径的已挂载驱动器提示。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略设置 env 块中的该变量。需要 Claude Code v2.1.304 或更高版本"
       }
     },
     {
@@ -5174,6 +5233,15 @@
       }
     },
     {
+      "key": "CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 so that claude ultrareview doesn't exit with Error: Workspace not trusted in a folder you haven't trusted when it can't ask you to trust it, such as in CI. Set it in the environment that launches Claude Code, not a settings env block, and only where every such run starts in a folder you trust. Runs that can ask still ask. Requires Claude Code v2.1.309 or later",
+        "zh": "设置为 1 后，当 claude ultrareview 在您尚未信任的文件夹中无法询问您是否信任该文件夹时（例如在 CI 中），它不会以 Error: Workspace not trusted 退出。请在启动 Claude Code 的环境中设置它，而不是在设置 env 块中设置，并且仅在每次此类运行都从您信任的文件夹开始的环境中设置。能够询问的运行仍会询问。需要 Claude Code v2.1.309 或更高版本"
+      }
+    },
+    {
       "key": "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT",
       "example": "1",
       "valueKind": "boolean-string",
@@ -5223,8 +5291,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "Set the effort level for supported models. Values: low, medium, high, xhigh, max, or auto to use the model default. Available levels depend on the model. Takes precedence over --effort, /effort, and the modelSettings and effortLevel settings. A maxEffortLevel cap still applies. See Adjust effort level",
-        "zh": "为受支持的模型设置 effort 级别。取值：low、medium、high、xhigh、max，或 auto（使用模型默认值）。可用级别取决于模型。优先于 --effort、/effort 以及 modelSettings 和 effortLevel 设置。maxEffortLevel 上限仍然适用。请参阅调整 effort 级别"
+        "en": "Set the effort level for supported models. Values: low, medium, high, xhigh, or max. Available levels depend on the model. Takes precedence over --effort, /effort, and the modelSettings and effortLevel settings. A maxEffortLevel cap still applies. Set it to auto or unset to have Claude Code send no effort level, so that the API applies its own default for the model. See Adjust effort level",
+        "zh": "为支持的模型设置 effort 级别。取值：low、medium、high、xhigh 或 max。可用级别取决于模型。优先于 --effort、/effort 以及 modelSettings 和 effortLevel 设置。maxEffortLevel 上限仍然适用。设置为 auto 或 unset 可让 Claude Code 不发送 effort 级别，从而由 API 为该模型应用其自身的默认值。请参阅调整 effort 级别"
       }
     },
     {
@@ -5313,8 +5381,17 @@
       "example": "false",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to false to turn off prompt suggestions, the grayed-out predictions that appear in your prompt input. Takes precedence over the promptSuggestionEnabled setting, which is what the Prompt suggestions toggle in /config writes. Claude Code also pauses suggestions while your account is close to or at its usage limit. Set to true to keep them on until you reach the limit. Requires Claude Code v2.1.238 or later. See Prompt suggestions",
-        "zh": "设置为 false 可关闭提示词建议，即输入框中显示的灰色预测内容。优先于 promptSuggestionEnabled 设置，/config 中的 Prompt suggestions 开关写入的正是该设置。当您的账户接近或达到用量限制时，Claude Code 也会暂停建议。设置为 true 可让建议保持开启，直到达到限制。需要 Claude Code v2.1.238 或更高版本。请参阅提示词建议"
+        "en": "Set to false to turn off prompt suggestions, the grayed-out predictions that appear in your prompt input. Takes precedence over the promptSuggestionEnabled setting, which is what the Prompt suggestions toggle in /config writes. Claude Code also pauses suggestions while your account is close to or at its usage limit. Set to true to keep that pause from applying until you reach the limit. Requires Claude Code v2.1.238 or later. See Prompt suggestions",
+        "zh": "设置为 false 可关闭提示词建议，即输入框中显示的灰色预测内容。优先于 promptSuggestionEnabled 设置，/config 中的 Prompt suggestions 开关写入的就是该设置。当您的账户接近或达到用量限制时，Claude Code 也会暂停建议。设置为 true 可使该暂停在您达到限制之前不生效。需要 Claude Code v2.1.238 或更高版本。请参阅提示词建议"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_ENABLE_SHARE_BUNDLE",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 to make /share save its report and the whole session transcript to a local archive under ~/.claude/feedback-bundles/ instead of sending the report to Anthropic. If your organization's policy turns off /share, you can't turn it back on with this variable. Requires Claude Code v2.1.299 or later",
+        "zh": "设置为 1 可使 /share 将其报告和整个会话记录保存到 ~/.claude/feedback-bundles/ 下的本地归档，而不是将报告发送给 Anthropic。如果您组织的策略关闭了 /share，则无法通过此变量重新开启。需要 Claude Code v2.1.299 或更高版本"
       }
     },
     {
@@ -5342,6 +5419,15 @@
       "description": {
         "en": "Set to 1 to get the task-tracking tools on every model. Without it, Claude Code provides them by default only on the models listed under Task tool availability. CLAUDE_CODE_ENABLE_TASKS still selects the Task tools or TodoWrite. Requires Claude Code v2.1.233 or later",
         "zh": "设置为 1 可在所有模型上获得任务跟踪工具。如果不设置，Claude Code 默认仅在 Task 工具可用性中列出的模型上提供这些工具。CLAUDE_CODE_ENABLE_TASKS 仍然决定使用 Task 工具还是 TodoWrite。需要 Claude Code v2.1.233 或更高版本"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 to run dangerous rm commands with no prompt in bypassPermissions mode, which removes a safety prompt for destructive deletes. The linked section lists where it has no effect. Set it in the environment that launches Claude Code, because Claude Code ignores it in a settings env block. Requires Claude Code v2.1.311 or later",
+        "zh": "设置为 1 可在 bypassPermissions 模式下无提示地运行危险的 rm 命令，这会移除针对破坏性删除的安全提示。链接的章节列出了该变量不生效的情况。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略设置 env 块中的该变量。需要 Claude Code v2.1.311 或更高版本"
       }
     },
     {
@@ -5412,17 +5498,17 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to draw mod Image elements as pictures when your terminal draws kitty graphics protocol images with Unicode placeholders but is not auto-detected. See which terminals Claude Code detects and why it doesn't help inside tmux or screen",
-        "zh": "当终端使用 Unicode 占位符绘制 kitty 图形协议图像但未被自动检测到时，设置为 1 可将 mod Image 元素绘制为图片。请参阅 Claude Code 会检测哪些终端，以及为什么它在 tmux 或 screen 中无济于事"
+        "en": "Set to 1 to draw mod Image elements as pictures when your terminal draws kitty graphics protocol images with Unicode placeholders and you still see an Image's dimmed alt text. See which terminals draw an Image and where not to set this variable",
+        "zh": "当您的终端使用 Unicode 占位符绘制 kitty 图形协议图像，而您仍看到 Image 的灰显 alt 文本时，设置为 1 可将 mod Image 元素绘制为图片。请参阅哪些终端会绘制 Image 以及在哪些情况下不应设置此变量"
       }
     },
     {
       "key": "CLAUDE_CODE_FORK_SUBAGENT",
-      "example": "1",
+      "example": "0",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Controls fork mode, which lets Claude spawn forked subagents itself and is on by default in interactive sessions only. Set to 1 to turn it on in claude -p and the Agent SDK as well, or 0 to turn it off in every kind of session. You can run /subtask whether or not fork mode is on. The interactive default requires Claude Code v2.1.232 or later; on earlier versions, set the variable to 1 to turn fork mode on",
-        "zh": "控制分叉模式，该模式允许 Claude 自行生成分叉子代理，默认仅在交互式会话中开启。设置为 1 可同时在 claude -p 和 Agent SDK 中开启，设置为 0 则在所有类型的会话中关闭。无论分叉模式是否开启，您都可以运行 /subtask。交互式会话中的默认开启需要 Claude Code v2.1.232 或更高版本；在更早的版本中，将该变量设置为 1 可开启分叉模式"
+        "en": "Controls fork mode, which is on by default and lets Claude start forks on its own. While fork mode is on, Claude also can't wait for a subagent in interactive terminal, VS Code, or desktop sessions on your machine. Set to 0 to turn fork mode off. For versions, see Turn fork mode off",
+        "zh": "控制 fork 模式，该模式默认开启，允许 Claude 自行启动 fork。在 fork 模式开启时，Claude 在您机器上的交互式终端、VS Code 或桌面会话中也无法等待子代理。设置为 0 可关闭 fork 模式。有关版本信息，请参阅关闭 fork 模式"
       }
     },
     {
@@ -5484,8 +5570,8 @@
       "example": "300000",
       "valueKind": "number-string",
       "description": {
-        "en": "Timeout in seconds for Glob tool file discovery. Defaults to 20 seconds on most platforms and 60 seconds on WSL",
-        "zh": "Glob 工具文件发现的超时时间（秒）。在大多数平台上默认为 20 秒，在 WSL 上为 60 秒"
+        "en": "Timeout in seconds for Glob and Grep tool searches. Defaults to 20 seconds on most platforms and 60 seconds on WSL",
+        "zh": "Glob 和 Grep 工具搜索的超时时间（秒）。在大多数平台上默认为 20 秒，在 WSL 上默认为 60 秒"
       }
     },
     {
@@ -5529,8 +5615,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to skip auto-installation of IDE extensions. Equivalent to setting autoInstallIdeExtension to false",
-        "zh": "设置为 1 可跳过 IDE 扩展的自动安装。等同于将 autoInstallIdeExtension 设置为 false"
+        "en": "Set to 1 to stop /ide from installing the IDE extension. Equivalent to setting autoInstallIdeExtension to false",
+        "zh": "设置为 1 可阻止 /ide 安装 IDE 扩展。等同于将 autoInstallIdeExtension 设置为 false"
       }
     },
     {
@@ -5592,8 +5678,8 @@
       "example": "300000",
       "valueKind": "string",
       "description": {
-        "en": "Override the number of times to retry failed API requests (default: 10). Capped at 15 as of v2.1.186; as of v2.1.199, CLAUDE_CODE_RETRY_WATCHDOG raises the default and removes the cap. For unattended sessions that need to wait through longer outages, set CLAUDE_CODE_RETRY_WATCHDOG instead",
-        "zh": "覆盖失败 API 请求的重试次数（默认：10）。从 v2.1.186 起上限为 15；从 v2.1.199 起，CLAUDE_CODE_RETRY_WATCHDOG 会提高默认值并取消上限。对于需要等待更长时间服务中断的无人值守会话，请改为设置 CLAUDE_CODE_RETRY_WATCHDOG"
+        "en": "Override the number of times to retry failed API requests (default: 10). Retrying can stop earlier on 529 overloaded errors. For example, with an API key on an Opus model, it stops at the third 529 and shows Repeated 529 Overloaded errors. If you set a fallback model, Claude Code switches to that model rather than showing the error. Capped at 15 as of v2.1.186; as of v2.1.199, CLAUDE_CODE_RETRY_WATCHDOG raises the default and removes the cap. For unattended sessions that need to wait through longer outages, set CLAUDE_CODE_RETRY_WATCHDOG instead",
+        "zh": "覆盖失败 API 请求的重试次数（默认：10）。遇到 529 过载错误时，重试可能会更早停止。例如，在 Opus 模型上使用 API 密钥时，会在第三次 529 时停止并显示 Repeated 529 Overloaded errors。如果您设置了备用模型，Claude Code 会切换到该模型，而不是显示错误。从 v2.1.186 起上限为 15；从 v2.1.199 起，CLAUDE_CODE_RETRY_WATCHDOG 会提高默认值并取消上限。对于需要等待较长中断的无人值守会话，请改为设置 CLAUDE_CODE_RETRY_WATCHDOG"
       }
     },
     {
@@ -5615,15 +5701,6 @@
       }
     },
     {
-      "key": "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY",
-      "example": "1",
-      "valueKind": "string",
-      "description": {
-        "en": "Maximum number of read-only tools and subagents that can execute in parallel (default: 10). Higher values increase parallelism but consume more resources",
-        "zh": "可并行执行的只读工具和子代理的最大数量（默认：10）。值越高，并行度越高，但消耗的资源也越多"
-      }
-    },
-    {
       "key": "CLAUDE_CODE_MAX_TURNS",
       "example": "value",
       "valueKind": "string",
@@ -5637,8 +5714,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "Cap on WebSearch calls (default: 200). When Claude reaches the cap, further WebSearch calls return a notice telling it to continue with the information it already gathered. Accepts a positive whole number with no upper bound. Anything else is ignored and the default applies, so the cap can be raised but not turned off. Requires Claude Code v2.1.212 or later",
-        "zh": "WebSearch 调用次数上限（默认：200）。当 Claude 达到上限后，后续 WebSearch 调用会返回一条通知，告知它使用已收集的信息继续。接受任意正整数，没有最大值限制。其他值会被忽略并应用默认值，因此该上限可以提高，但不能关闭。需要 Claude Code v2.1.212 或更高版本"
+        "en": "Cap on WebSearch calls (default: 200). When Claude reaches the cap, further WebSearch calls return a notice telling it to continue with the information it already gathered and say so in its answer. Accepts a positive whole number with no upper bound. Anything else is ignored and the default applies, so the cap can be raised but not turned off. Requires Claude Code v2.1.212 or later",
+        "zh": "WebSearch 调用次数上限（默认值：200）。当 Claude 达到上限时，后续的 WebSearch 调用会返回一条通知，告诉它使用已收集的信息继续，并在回答中说明这一点。接受无上限的正整数。其他任何值都会被忽略并应用默认值，因此上限可以提高但不能关闭。需要 Claude Code v2.1.212 或更高版本"
       }
     },
     {
@@ -5655,8 +5732,8 @@
       "example": "0",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Elapsed time in milliseconds before a still-running MCP tool call moves to a background task (default: 120000, or 2 minutes). Set to 0 to turn automatic backgrounding off. Requires Claude Code v2.1.212 or later",
-        "zh": "仍在运行的 MCP 工具调用在经过多长时间（毫秒）后转为后台任务（默认：120000，即 2 分钟）。设置为 0 可关闭自动转入后台。需要 Claude Code v2.1.212 或更高版本"
+        "en": "Elapsed time in milliseconds before a still-running MCP tool call moves to a background task (default: 120000, or 2 minutes). Set to 0 to turn automatic backgrounding off and, in an interactive session, to make Claude wait for MCP tasks. Requires Claude Code v2.1.212 or later",
+        "zh": "仍在运行的 MCP 工具调用转为后台任务之前经过的时间（毫秒，默认值：120000，即 2 分钟）。设置为 0 可关闭自动转入后台，并在交互式会话中让 Claude 等待 MCP 任务。需要 Claude Code v2.1.212 或更高版本"
       }
     },
     {
@@ -5664,8 +5741,8 @@
       "example": "0",
       "valueKind": "boolean-string",
       "description": {
-        "en": "How long in milliseconds the first turn of a non-interactive session waits for MCP servers that are still connecting, in place of the default first-turn wait. When set, the wait covers every pending server; in a self-hosted environment, it changes only how long the wait lasts. Set to 0 to skip the wait. A --permission-prompt-tool server keeps its own MCP_TIMEOUT wait regardless of the value. Requires Claude Code v2.1.274 or later",
-        "zh": "非交互会话的第一轮等待仍在连接的 MCP 服务器的时长（毫秒），用于替代默认的首轮等待。设置后，等待会涵盖所有待连接的服务器；在自托管环境中，它只改变等待持续的时长。设置为 0 可跳过等待。无论该值如何，--permission-prompt-tool 服务器都会保持其自身的 MCP_TIMEOUT 等待。需要 Claude Code v2.1.274 或更高版本"
+        "en": "How long in milliseconds the first turn of a non-interactive session waits for MCP servers that are still connecting, in place of the default first-turn wait. In a self-hosted environment, it changes only how long the wait lasts. Some servers keep a wait of their own regardless of the value; Connection timing lists them. Set to 0 to skip the wait for every other server. Requires Claude Code v2.1.274 or later",
+        "zh": "非交互会话的第一个轮次等待仍在连接中的 MCP 服务器的时长（毫秒），用以替代默认的首轮等待。在自托管环境中，它只改变等待持续的时长。某些服务器无论该值如何都会保留自己的等待；连接时机列出了这些服务器。设置为 0 可跳过对其他所有服务器的等待。需要 Claude Code v2.1.274 或更高版本"
       }
     },
     {
@@ -5745,8 +5822,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "OAuth refresh token for Claude.ai authentication. When set, claude auth login exchanges this token directly instead of opening a browser. Requires CLAUDE_CODE_OAUTH_SCOPES. Useful for provisioning authentication in automated environments",
-        "zh": "用于 Claude.ai 身份验证的 OAuth 刷新令牌。设置后，claude auth login 会直接交换此令牌，而不是打开浏览器。需要同时设置 CLAUDE_CODE_OAUTH_SCOPES。适用于在自动化环境中预配身份验证"
+        "en": "OAuth refresh token for claude.ai authentication. When set, claude auth login exchanges this token directly instead of opening a browser. Requires CLAUDE_CODE_OAUTH_SCOPES. Useful for provisioning authentication in automated environments. Ignored in project and local settings",
+        "zh": "用于 claude.ai 身份验证的 OAuth 刷新令牌。设置后，claude auth login 会直接交换此令牌，而不是打开浏览器。需要 CLAUDE_CODE_OAUTH_SCOPES。适用于在自动化环境中预置身份验证。在项目设置和本地设置中会被忽略"
       }
     },
     {
@@ -5754,8 +5831,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "Space-separated OAuth scopes the refresh token was issued with, such as \"user:profile user:inference user:sessions:claude_code\". Required when CLAUDE_CODE_OAUTH_REFRESH_TOKEN is set",
-        "zh": "颁发刷新令牌时使用的以空格分隔的 OAuth 作用域，例如 \"user:profile user:inference user:sessions:claude_code\"。设置 CLAUDE_CODE_OAUTH_REFRESH_TOKEN 时必需"
+        "en": "Space-separated OAuth scopes the refresh token was issued with, such as \"user:profile user:inference user:sessions:claude_code\". Required when CLAUDE_CODE_OAUTH_REFRESH_TOKEN is set. Ignored in project and local settings",
+        "zh": "签发刷新令牌时使用的 OAuth 作用域，以空格分隔，例如 \"user:profile user:inference user:sessions:claude_code\"。设置 CLAUDE_CODE_OAUTH_REFRESH_TOKEN 时必需。在项目设置和本地设置中会被忽略"
       }
     },
     {
@@ -5763,8 +5840,8 @@
       "example": "sk-...",
       "valueKind": "string",
       "description": {
-        "en": "OAuth access token for claude.ai authentication. Alternative to /login for SDK and automated environments. Takes precedence over keychain-stored credentials. Generate one with claude setup-token. Unless you run /login, Claude Code uses the token you set for the whole session. To replace an expired token, generate a new one and restart",
-        "zh": "用于 claude.ai 身份验证的 OAuth 访问令牌。是 SDK 和自动化环境中 /login 的替代方案。优先于钥匙串中存储的凭据。可使用 claude setup-token 生成。除非您运行 /login，否则 Claude Code 会在整个会话中使用您设置的令牌。要替换过期的令牌，请生成新令牌并重新启动"
+        "en": "OAuth access token for claude.ai authentication. Alternative to /login for SDK and automated environments. Ignored in project and local settings. Takes precedence over keychain-stored credentials. Generate one with claude setup-token. Unless you run /login, Claude Code uses the token you set for the whole session. To replace an expired token, generate a new one and restart",
+        "zh": "用于 claude.ai 身份验证的 OAuth 访问令牌。在 SDK 和自动化环境中可替代 /login。在项目设置和本地设置中会被忽略。优先于存储在钥匙串中的凭据。使用 claude setup-token 生成。除非您运行 /login，否则 Claude Code 会在整个会话中使用您设置的令牌。要替换已过期的令牌，请生成新令牌并重新启动"
       }
     },
     {
@@ -6047,6 +6124,15 @@
       }
     },
     {
+      "key": "CLAUDE_CODE_RESUME_SHOWS_CUT_OFF_CALLS",
+      "example": "1",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to 1 to keep interrupted tool calls, marked as cut off, in a turn that CLAUDE_CODE_RESUME_INTERRUPTED_TURN continues. When unset, those calls are dropped before the turn continues. Some calls stay dropped, such as calls to subagents, skills, workflows, and tools that wait on a person. For the VS Code chat panel, see Continue conversations after a reload. Requires Claude Code v2.1.309 or later",
+        "zh": "设置为 1 可在 CLAUDE_CODE_RESUME_INTERRUPTED_TURN 继续的轮次中保留被中断的工具调用，并将其标记为已截断。未设置时，这些调用会在轮次继续之前被丢弃。某些调用仍会被丢弃，例如对子代理、skill、工作流以及等待人工操作的工具的调用。对于 VS Code 聊天面板，请参阅重新加载后继续对话。需要 Claude Code v2.1.309 或更高版本"
+      }
+    },
+    {
       "key": "CLAUDE_CODE_RETRY_WATCHDOG",
       "example": "1",
       "valueKind": "boolean-string",
@@ -6062,6 +6148,15 @@
       "description": {
         "en": "Maximum time in milliseconds that each API request spends waiting out 429 and 529 errors when CLAUDE_CODE_RETRY_WATCHDOG is set. Once that time is spent, the next such error ends the request. Give a positive whole number in plain digits, such as 1800000 for 30 minutes. When unset, the wait has no limit. Requires Claude Code v2.1.295 or later",
         "zh": "设置 CLAUDE_CODE_RETRY_WATCHDOG 时，每个 API 请求在等待 429 和 529 错误上所花费的最长时间（毫秒）。这段时间用完后，下一个此类错误将结束该请求。请以纯数字给出正整数，例如 1800000 表示 30 分钟。未设置时，等待没有限制。需要 Claude Code v2.1.295 或更高版本"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_RETRY_WATCHDOG_USAGE_LIMIT_RECHECK_MS",
+      "example": "60000",
+      "valueKind": "number-string",
+      "description": {
+        "en": "Minimum interval in milliseconds between checks of whether a usage limit was already lifted, while a request waits for that limit to reset with CLAUDE_CODE_RETRY_WATCHDOG set. When a check finds the limit lifted, the request goes out at once. Give a whole number in plain digits from 60000, one minute, to 10800000, three hours. Checks are made only for a claude.ai subscription's session or weekly limit while usage credits aren't in use, and not while CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set. When this variable is unset or its value is outside that range, no checks are made. Requires Claude Code v2.1.305 or later",
+        "zh": "在设置了 CLAUDE_CODE_RETRY_WATCHDOG 且请求正在等待用量限制重置期间，检查该限制是否已提前解除的最小间隔（毫秒）。当检查发现限制已解除时，请求会立即发出。以纯数字给出从 60000（一分钟）到 10800000（三小时）之间的整数。仅在未使用使用额度时针对 claude.ai 订阅的会话限制或每周限制进行检查，并且在设置了 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 时不进行检查。当此变量未设置或其值超出该范围时，不进行任何检查。需要 Claude Code v2.1.305 或更高版本"
       }
     },
     {
@@ -6362,15 +6457,6 @@
       }
     },
     {
-      "key": "CLAUDE_CODE_TEAM_TEARDOWN_PARK_TIMEOUT_MS",
-      "example": "300000",
-      "valueKind": "number-string",
-      "description": {
-        "en": "Override, in milliseconds, how long a non-interactive session waits at exit for its agent team to finish tearing down. Accepts 1000 to 60000; an out-of-range value is ignored and the default of 10000 applies. Requires Claude Code v2.1.206 or later",
-        "zh": "覆盖非交互式会话在退出时等待其 agent team 完成拆除的时长（毫秒）。接受 1000 到 60000；超出范围的值会被忽略并应用默认值 10000。需要 Claude Code v2.1.206 或更高版本"
-      }
-    },
-    {
       "key": "CLAUDE_CODE_TMPDIR",
       "example": "value",
       "valueKind": "string",
@@ -6411,8 +6497,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to limit how large the transcript file of a long -p or Agent SDK session grows. After each compaction, once the file is larger than 5 MB, Claude Code removes the history from before that compaction. Resuming the session restores the same conversation whether or not the file was trimmed. Set it in the environment you start Claude Code from, since a settings env block can't turn it on. Requires Claude Code v2.1.287 or later",
-        "zh": "设置为 1 可限制长时间运行的 -p 或 Agent SDK 会话的会话记录文件的增长大小。每次压缩后，一旦文件大于 5 MB，Claude Code 就会删除该次压缩之前的历史记录。无论文件是否被裁剪，恢复会话都会还原相同的对话。请在启动 Claude Code 的环境中设置此变量，因为设置中的 env 块无法开启它。需要 Claude Code v2.1.287 或更高版本"
+        "en": "Set to 1 to limit how large the transcript file of a long -p or Agent SDK session grows. After each compaction, once the file is larger than 5 MB, Claude Code removes the history from before that compaction. On v2.1.296 or later, the file stays as it is when removing that history would shrink it by less than 10%. Resuming the session restores the same conversation whether or not the file was trimmed. Set it in the environment you start Claude Code from, since a settings env block can't turn it on. Requires Claude Code v2.1.287 or later",
+        "zh": "设置为 1 可限制长时间运行的 -p 或 Agent SDK 会话的会话记录文件的增长大小。每次压缩后，一旦文件大于 5 MB，Claude Code 会删除该次压缩之前的历史记录。在 v2.1.296 或更高版本中，如果删除这些历史记录只能让文件缩小不到 10%，则文件保持不变。无论文件是否被裁剪，恢复会话都会还原相同的对话。请在启动 Claude Code 的环境中设置此变量，因为设置中的 env 块无法启用它。需要 Claude Code v2.1.287 或更高版本"
       }
     },
     {
@@ -6452,15 +6538,6 @@
       }
     },
     {
-      "key": "CLAUDE_CODE_USE_NATIVE_FILE_SEARCH",
-      "example": "1",
-      "valueKind": "boolean-string",
-      "description": {
-        "en": "Set to 1 to discover custom commands, subagents, and output styles using Node.js file APIs instead of ripgrep. Set this if the bundled ripgrep binary is unavailable or blocked in your environment. Does not affect the Grep or file search tools",
-        "zh": "设置为 1 可使用 Node.js 文件 API 而非 ripgrep 来发现自定义命令、子代理和输出样式。如果捆绑的 ripgrep 二进制文件在您的环境中不可用或被阻止，请设置此变量。不影响 Grep 或文件搜索工具"
-      }
-    },
-    {
       "key": "CLAUDE_CODE_USE_POWERSHELL_TOOL",
       "example": "0",
       "valueKind": "boolean-string",
@@ -6485,6 +6562,24 @@
       "description": {
         "en": "Deadline in milliseconds before Claude Code cancels a dialog it forwards to a remote client such as a Remote Control or SDK host, or the approval dialog for a held cross-session message; permission prompts and AskUserQuestion questions use their own flows and aren't governed by it. On Claude Code v2.1.236 or later, it also bounds the mid-session Fable usage-credits consent prompt in a session that may be running unattended. Control inbound messages and non-interactive sessions cover the full held-message expiry rules, including the cases where the deadline doesn't apply. Overrides the dialogExpiry setting. 0 or a negative value disables the deadline. Ignored in project and local settings",
         "zh": "Claude Code 取消其转发给远程客户端（例如 Remote Control 或 SDK 主机）的对话框，或取消被暂扣的跨会话消息的批准对话框之前的截止时间（毫秒）；权限提示和 AskUserQuestion 问题使用各自的流程，不受此变量控制。在 Claude Code v2.1.236 或更高版本中，它还会限制可能处于无人值守运行状态的会话中途出现的 Fable 使用额度同意提示。控制入站消息和非交互会话介绍了完整的暂扣消息过期规则，包括截止时间不适用的情况。覆盖 dialogExpiry 设置。0 或负值会禁用截止时间。在项目和本地设置中被忽略"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_WARN_DISK_FREE_GIB",
+      "example": "0",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "Set to a whole number of GiB, such as 10, to have Claude Code warn Claude when free space on the working directory's filesystem falls below that amount. The warning is a system reminder saying how much is free. The reminder is off when the variable is unset, 0, or not plain digits. Set it in the environment that launches Claude Code, since Claude Code ignores a copy delivered through a settings env block. Requires Claude Code v2.1.304 or later",
+        "zh": "设置为 GiB 整数（例如 10），当工作目录所在文件系统的可用空间低于该值时，Claude Code 会警告 Claude。该警告是一条说明剩余可用空间的系统提醒。当变量未设置、为 0 或不是纯数字时，该提醒处于关闭状态。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略通过设置中的 env 块传入的副本。需要 Claude Code v2.1.304 或更高版本"
+      }
+    },
+    {
+      "key": "CLAUDE_CODE_WARN_MEMORY_FREE_GIB",
+      "example": "0",
+      "valueKind": "boolean-string",
+      "description": {
+        "en": "On Linux and WSL, set to a whole number of GiB such as 4 to have Claude Code warn Claude when available memory falls below that amount. The warning is a system reminder saying how much is available. The reminder is off when the variable is unset, 0, or not plain digits. Set it in the environment that launches Claude Code, since Claude Code ignores a copy delivered through a settings env block. Requires Claude Code v2.1.304 or later",
+        "zh": "在 Linux 和 WSL 上，设置为 GiB 整数（例如 4），当可用内存低于该值时，Claude Code 会警告 Claude。该警告是一条说明可用内存量的系统提醒。当变量未设置、为 0 或不是纯数字时，该提醒处于关闭状态。请在启动 Claude Code 的环境中设置它，因为 Claude Code 会忽略通过设置中的 env 块传入的副本。需要 Claude Code v2.1.304 或更高版本"
       }
     },
     {
@@ -6560,21 +6655,12 @@
       }
     },
     {
-      "key": "CLAUDE_DISABLE_ADOPT",
-      "example": "1",
-      "valueKind": "boolean-string",
-      "description": {
-        "en": "Set to 1 to stop in-flight background work instead of carrying it over when you background a session by pressing ← or with /background. Claude Code asks you to confirm before backgrounding, then stops the tasks that would otherwise carry over. Requires Claude Code v2.1.195 or later",
-        "zh": "设置为 1 后，当您按 ← 或使用 /background 将会话转入后台时，会停止进行中的后台工作，而不是将其延续。Claude Code 会在转入后台之前请您确认，然后停止原本会被延续的任务。需要 Claude Code v2.1.195 或更高版本"
-      }
-    },
-    {
       "key": "CLAUDE_EFFORT",
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "Set automatically in Bash tool subprocesses and hook commands to the effort level in effect when the subprocess starts: low, medium, high, xhigh, or max. Matches the effort.level field passed to hooks. Only set when the current model supports the effort parameter",
-        "zh": "在 Bash 工具子进程和 hook 命令中自动设置为子进程启动时生效的 effort 级别：low、medium、high、xhigh 或 max。与传递给 hook 的 effort.level 字段一致。仅在当前模型支持 effort 参数时设置"
+        "en": "Set automatically in Bash tool subprocesses and hook commands to the effort level setting when the subprocess starts: low, medium, high, xhigh, or max. Matches the effort.level field passed to hooks. Only set when the current model supports the effort parameter",
+        "zh": "在 Bash 工具子进程和 hook 命令中自动设置为子进程启动时的 effort 级别设置：low、medium、high、xhigh 或 max。与传递给 hook 的 effort.level 字段一致。仅在当前模型支持 effort 参数时设置"
       }
     },
     {
@@ -6762,8 +6848,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 or true to disable GrowthBook feature-flag fetching and use code defaults for every flag. This makes Remote Control and the other features that need feature-flag fetching unavailable. Setting it to 0 or false leaves fetching on. Telemetry event logging stays on unless DISABLE_TELEMETRY is also set",
-        "zh": "设置为 1 或 true 可禁用 GrowthBook 功能标志获取，并对每个标志使用代码中的默认值。这会使 Remote Control 以及其他需要获取功能标志的功能不可用。设置为 0 或 false 会保持获取开启。除非同时设置了 DISABLE_TELEMETRY，否则遥测事件日志记录保持开启"
+        "en": "Set to 1 or true to disable feature-flag fetching and use code defaults for every flag. This makes Remote Control and the other features that need feature-flag fetching unavailable. Setting it to 0 or false leaves fetching on. Telemetry event logging stays on unless DISABLE_TELEMETRY is also set",
+        "zh": "设置为 1 或 true 可禁用功能标志获取，并对每个标志使用代码中的默认值。这会使 Remote Control 以及其他需要获取功能标志的功能不可用。设置为 0 或 false 会保持获取开启。除非同时设置了 DISABLE_TELEMETRY，否则遥测事件日志记录保持开启"
       }
     },
     {
@@ -6915,8 +7001,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to request a 1-hour prompt cache TTL instead of the default 5 minutes. Intended for API key, Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry, and Claude Platform on AWS users. Subscription users within included usage receive the 1-hour TTL automatically on the main conversation. Subscription users drawing on usage credits can set it to keep the 1-hour TTL. 1-hour cache writes are billed at a higher rate. To choose the TTL per request bucket instead, use CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, which take precedence over this variable",
-        "zh": "设置为 1 可请求 1 小时的提示缓存 TTL，而不是默认的 5 分钟。适用于 API 密钥、Amazon Bedrock、Google Cloud's Agent Platform、Microsoft Foundry 和 Claude Platform on AWS 用户。在包含用量范围内的订阅用户会在主对话上自动获得 1 小时 TTL。正在使用使用额度的订阅用户可以设置此变量以保留 1 小时 TTL。1 小时缓存写入按更高费率计费。如需改为按请求类别选择 TTL，请使用 CLAUDE_CODE_PROMPT_CACHE_TTL 和 CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL，它们优先于此变量"
+        "en": "Set to 1 to request a 1-hour prompt cache TTL instead of the default 5 minutes. Intended for API key, Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry, and Claude Platform on AWS users. For subscription users within included usage, Claude Code requests the 1-hour TTL automatically on the main conversation. Subscription users drawing on usage credits can set it to keep the 1-hour TTL. 1-hour cache writes are billed at a higher rate. To choose the TTL separately for the main conversation and for requests outside it, use CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, which take precedence over this variable",
+        "zh": "设置为 1 可请求 1 小时的提示缓存 TTL，而不是默认的 5 分钟。适用于 API 密钥、Amazon Bedrock、Google Cloud's Agent Platform、Microsoft Foundry 和 Claude Platform on AWS 用户。对于在所含用量范围内的订阅用户，Claude Code 会在主对话上自动请求 1 小时 TTL。正在消耗使用额度的订阅用户可以设置此变量以保持 1 小时 TTL。1 小时缓存写入按更高费率计费。若要分别为主对话和主对话之外的请求选择 TTL，请使用 CLAUDE_CODE_PROMPT_CACHE_TTL 和 CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL，它们优先于此变量"
       }
     },
     {
@@ -6924,8 +7010,8 @@
       "example": "1",
       "valueKind": "string",
       "description": {
-        "en": "Deprecated. Use ENABLE_PROMPT_CACHING_1H instead",
-        "zh": "已弃用。请改用 ENABLE_PROMPT_CACHING_1H"
+        "en": "Deprecated. Use ENABLE_PROMPT_CACHING_1H instead. Has no effect on Claude apps gateway sessions, even when the gateway routes to Amazon Bedrock",
+        "zh": "已弃用。请改用 ENABLE_PROMPT_CACHING_1H。对 Claude apps gateway 会话无效，即使网关路由到 Amazon Bedrock 也是如此"
       }
     },
     {
@@ -6933,17 +7019,8 @@
       "example": "true",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Controls MCP tool search. Unset, Claude Code defers all MCP tools by default, and loads them upfront instead when ANTHROPIC_BASE_URL points to a non-first-party host. true keeps them deferred on such a host too. auto loads upfront when tool definitions fit within 10% of context. auto:N sets a custom threshold, such as auto:5 for 5%. false loads all tools upfront. For the models and deployments that load every tool upfront whatever this value is, see Configure tool search",
-        "zh": "控制 MCP 工具搜索。未设置时，Claude Code 默认延迟加载所有 MCP 工具，而当 ANTHROPIC_BASE_URL 指向非第一方主机时则改为预先加载。true 会使它们在此类主机上也保持延迟加载。auto 在工具定义所占上下文不超过 10% 时预先加载。auto:N 设置自定义阈值，例如 auto:5 表示 5%。false 会预先加载所有工具。有关无论此值如何都会预先加载所有工具的模型和部署，请参阅配置工具搜索"
-      }
-    },
-    {
-      "key": "FALLBACK_FOR_ALL_PRIMARY_MODELS",
-      "example": "1",
-      "valueKind": "boolean-string",
-      "description": {
-        "en": "Set to any non-empty value, such as 1, to make Claude Code stop retrying on repeated overload errors for every model when no fallback model is configured. Setting it to 0 or false still enables this, unlike most on/off variables; unset the variable to restore the default retry behavior. Without it, Claude Code stops retrying this way on models it recognizes as Opus, Fable, or Mythos models when you authenticate with an API key or a third-party provider rather than a Claude subscription. On Claude Code v2.1.160 or later, Claude Code switches to your configured fallback model chain on repeated overload errors for any primary model, so this variable doesn't affect switching to a fallback model",
-        "zh": "设置为任意非空值（例如 1），可在未配置备用模型时，让 Claude Code 对所有模型在重复出现过载错误时停止重试。与大多数开/关变量不同，将其设置为 0 或 false 仍会启用此行为；取消设置该变量即可恢复默认的重试行为。如果不设置此变量，当您使用 API 密钥或第三方提供商而非 Claude 订阅进行身份验证时，Claude Code 仅在其识别为 Opus、Fable 或 Mythos 的模型上以这种方式停止重试。在 Claude Code v2.1.160 或更高版本中，对于任何主模型，Claude Code 都会在重复出现过载错误时切换到您配置的备用模型链，因此此变量不影响切换到备用模型"
+        "en": "Controls MCP tool search. Unset or true defers MCP tools, except in the cases that keep tool search off. auto turns tool search on once definitions reach 10% of the context window. auto:N sets a custom threshold, such as auto:5 for 5%. false loads all tools upfront. If a gateway rejects tool search, see Tool search through an LLM gateway",
+        "zh": "控制 MCP 工具搜索。未设置或为 true 时会延迟加载 MCP 工具，但保持工具搜索关闭的情况除外。auto 会在工具定义达到上下文窗口的 10% 时开启工具搜索。auto:N 设置自定义阈值，例如 auto:5 表示 5%。false 会预先加载所有工具。如果网关拒绝工具搜索，请参阅通过 LLM 网关使用工具搜索"
       }
     },
     {
@@ -6960,8 +7037,8 @@
       "example": "1",
       "valueKind": "boolean-string",
       "description": {
-        "en": "Set to 1 to enable clickable OSC 8 hyperlinks when your terminal supports them but isn't auto-detected, or 0 to disable them. When unset, Claude Code enables hyperlinks only when it detects terminal support. Claude Code parses this value as a number, not a Boolean, so a value such as false, no, or off enables hyperlinks rather than disabling them. The footer PR or merge request badge renders as a hyperlink even when Claude Code can't detect terminal support, such as over SSH. Set 0 to render the badge as plain text",
-        "zh": "设置为 1 可在您的终端支持可点击的 OSC 8 超链接但未被自动检测到时启用它们，设置为 0 可禁用它们。未设置时，Claude Code 仅在检测到终端支持时启用超链接。Claude Code 将此值解析为数字而非布尔值，因此 false、no 或 off 之类的值会启用超链接，而不是禁用它们。即使 Claude Code 无法检测到终端支持（例如通过 SSH 时），页脚的 PR 或合并请求徽章也会渲染为超链接。设置为 0 可将该徽章渲染为纯文本"
+        "en": "Set to 1 to enable clickable OSC 8 hyperlinks when your terminal supports them but isn't auto-detected. When unset, Claude Code enables most hyperlinks only when it detects terminal support. The footer PR or merge request badge and long sign-in URLs are links either way. Set 0, false, no, or off to render all of them as plain text. Before v2.1.314, false, no, and off enabled hyperlinks instead",
+        "zh": "设置为 1 以在终端支持但未被自动检测到时启用可点击的 OSC 8 超链接。未设置时，Claude Code 仅在检测到终端支持时才启用大多数超链接。底部栏中的 PR 或合并请求徽章和较长的登录 URL 无论如何都是链接。设置为 0、false、no 或 off 可将它们全部渲染为纯文本。在 v2.1.314 之前，false、no 和 off 反而会启用超链接"
       }
     },
     {
@@ -7104,8 +7181,8 @@
       "example": "value",
       "valueKind": "string",
       "description": {
-        "en": "On the v2 MCP client runtime only, whether Claude Code probes servers for MCP protocol revision 2026-07-28. Set auto to probe HTTP, claude.ai connector, and stdio servers, or legacy to probe none. With the variable unset, Claude Code probes the servers described under MCP client runtimes. Any other value is ignored with a warning in the debug log. Requires Claude Code v2.1.221 or later",
-        "zh": "仅在 v2 MCP 客户端运行时上，控制 Claude Code 是否探测服务器是否支持 MCP 协议修订版 2026-07-28。设置为 auto 可探测 HTTP、claude.ai 连接器和 stdio 服务器，设置为 legacy 则不探测任何服务器。未设置该变量时，Claude Code 会探测 MCP 客户端运行时中所述的服务器。任何其他值都会被忽略，并在调试日志中记录警告。需要 Claude Code v2.1.221 或更高版本"
+        "en": "On the v2 MCP client runtime only, controls whether Claude Code probes servers for MCP protocol revision 2026-07-28. Set legacy to skip the probe, so that every server connects with the handshake from before that revision. Set auto to probe the server kinds that support the probe: HTTP and stdio servers, claude.ai connectors, and the connectors of cloud and Remote Control sessions. With the variable unset, Claude Code probes those same kinds by default; see MCP client runtimes. Any other value is ignored with a warning in the debug log. Requires Claude Code v2.1.221 or later",
+        "zh": "仅在 v2 MCP 客户端运行时上，控制 Claude Code 是否探测服务器对 MCP 协议修订版 2026-07-28 的支持。设置为 legacy 可跳过探测，使每个服务器都使用该修订版之前的握手方式连接。设置为 auto 可探测支持探测的服务器类型：HTTP 和 stdio 服务器、claude.ai 连接器，以及云端会话和 Remote Control 会话的连接器。变量未设置时，Claude Code 默认探测这些相同的类型；请参阅 MCP 客户端运行时。任何其他值都会被忽略，并在调试日志中记录警告。需要 Claude Code v2.1.221 或更高版本"
       }
     },
     {
