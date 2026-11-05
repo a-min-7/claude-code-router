@@ -72,14 +72,27 @@ async function startFixture({
   /** Deliberately non-conforming: task a client even though we never advertised. */
   forceTask = false,
   /**
-   * Optional `{ advertiseTasks }` read at REQUEST time, so a test can make the
-   * server begin advertising on a connection that is already open (issue #31).
-   * Omit it and the captured `advertiseTasks` above is used, which is what every
+   * Optional `{ advertiseTasks, forceTask }` read at REQUEST time, so a test can
+   * make the server begin advertising — or begin answering with a task it was
+   * never entitled to create — on a connection that is already open (issues #31,
+   * #33). Omit a key and the captured value above is used, which is what every
    * other test does.
    */
-  live = null
+  live = null,
+  /**
+   * Per-call latency for `tools/call`, keyed on the call's arguments, so a test
+   * can hold one request in flight while another completes and triggers the
+   * task-runtime recovery (issue #33).
+   */
+  toolsCallDelayMs = () => 0,
+  /**
+   * Latency on the handshake (`server/discover` / `initialize`), so a test can
+   * widen the window in which two recoveries overlap (issue #33).
+   */
+  handshakeDelayMs = 0
 } = {}) {
   const advertises = () => (live ? live.advertiseTasks : advertiseTasks);
+  const forcesTask = () => (live?.forceTask === undefined ? forceTask : live.forceTask);
   const requests = [];
   const violations = [];
   let legacy = false;
@@ -135,9 +148,26 @@ async function startFixture({
       const declared = Boolean(
         meta?.["io.modelcontextprotocol/clientCapabilities"]?.extensions?.[TASKS_EXTENSION_ID]
       );
+      // Latency is applied at REPLY time, which is what a test needs to park one
+      // request while another completes. A parked reply may belong to a
+      // connection the client has since closed, so a dead response is left alone.
+      const responseDelayMs =
+        body.method === "tools/call"
+          ? toolsCallDelayMs(body.params?.arguments ?? {})
+          : body.method === "server/discover" || body.method === "initialize"
+            ? handshakeDelayMs
+            : 0;
       const reply = (result) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+        const write = () => {
+          if (res.destroyed || res.writableEnded) return;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+        };
+        if (responseDelayMs > 0) {
+          setTimeout(write, responseDelayMs);
+        } else {
+          write();
+        }
       };
       const now = new Date().toISOString();
 
@@ -167,7 +197,7 @@ async function startFixture({
         case "tools/call":
           // A conforming server only returns a task when it advertised the
           // extension AND the client declared it (SEP-2663, server step 2).
-          if (toolBehaviour === "task" && declared && (advertises() || forceTask)) {
+          if (toolBehaviour === "task" && declared && (advertises() || forcesTask())) {
             reply({
               resultType: "task",
               taskId: TASK_ID,
@@ -260,6 +290,17 @@ async function withAdapter(config, run) {
     return await run(adapter);
   } finally {
     await adapter.close();
+  }
+}
+
+/** Poll until a fixture-observed condition holds, so a race test is not a sleep. */
+async function waitUntil(predicate, description) {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
@@ -493,6 +534,81 @@ test("a server that begins advertising is re-probed on the same connection (issu
       "after the server began advertising, the SAME connection must attach and poll; " +
         `observed tasks/get=${fixture.countOf("tasks/get")} texts=${JSON.stringify(texts)}`
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+// ── The recovery races (issues #33, #34) ──────────────────────────────
+
+test("a recovery that closes the discarded client does not fail a call in flight on it (issue #33)", async () => {
+  // ⚠️ The close is what keeps the recovery from leaking a connection per call,
+  // but it settles EVERY in-flight response handler on that client with
+  // `SdkError(ConnectionClosed)` — an error with no HTTP status. It used to be
+  // classified as "not session loss", so a parallel `tools/call` that had always
+  // completed on the old client hard-failed instead. Since the request may
+  // already have reached the server, the model's retry can double-execute a
+  // side-effecting tool. Classifying it as session loss replays it once on the
+  // rebuilt connection, exactly as a closed SSE stream is replayed.
+  const live = { advertiseTasks: false };
+  const fixture = await startFixture({
+    live,
+    toolBehaviour: "task",
+    toolsCallDelayMs: (args) => (args.input === "slow" ? 400 : 0)
+  });
+  try {
+    await withAdapter(makeServerConfig({ url: fixture.url }), async (adapter) => {
+      assert.equal(
+        (await adapter.callTool(TOOL_NAME, { input: "warm" })).content[0].text,
+        "PLAIN ANSWER",
+        "the warm-up must establish a connection whose handshake says the server does not advertise"
+      );
+      // The server begins advertising mid-life; the open connection's captured
+      // capabilities still say it does not, so both calls below take the plain
+      // path and are answered with a task the SDK cannot decode.
+      live.advertiseTasks = true;
+      const slow = adapter.callTool(TOOL_NAME, { input: "slow" }); // parked on the old client
+      await waitUntil(() => fixture.countOf("tools/call") === 2, "the parked request to reach the server");
+      const fast = adapter.callTool(TOOL_NAME, { input: "fast" }); // fails, then closes that client
+      const [slowResult, fastResult] = await Promise.all([slow, fast]);
+      assert.equal(slowResult.content[0].text, ANSWER, "the in-flight call must be replayed, not failed");
+      assert.equal(fastResult.content[0].text, ANSWER);
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("two concurrent recoveries share one rebuild instead of closing each other's client (issue #33)", async () => {
+  // The cooldown arms only on FAILURE, so a second caller reaching the gate while
+  // the first sits mid-rebuild used to pass it and close the FIRST caller's
+  // freshly built client. Here neither recovery can succeed — the server answers
+  // with a task it never advertised, and never starts advertising — so both fail,
+  // and the rebuild count is what discriminates: one shared rebuild versus two.
+  const live = { advertiseTasks: false, forceTask: false };
+  const fixture = await startFixture({ live, toolBehaviour: "task", handshakeDelayMs: 120 });
+  try {
+    await withAdapter(makeServerConfig({ url: fixture.url }), async (adapter) => {
+      assert.equal(
+        (await adapter.callTool(TOOL_NAME, { input: "warm" })).content[0].text,
+        "PLAIN ANSWER"
+      );
+      const discoversBefore = fixture.countOf("server/discover");
+      live.forceTask = true; // non-conforming: a task even though we never advertised
+      const results = await Promise.allSettled([
+        adapter.callTool(TOOL_NAME, { input: "a" }),
+        adapter.callTool(TOOL_NAME, { input: "b" })
+      ]);
+      for (const result of results) {
+        assert.equal(result.status, "rejected", "the non-conforming server must surface the decode failure");
+        assert.equal(result.reason?.code, "UNSUPPORTED_RESULT_TYPE", `got ${result.reason?.code}`);
+      }
+      assert.equal(
+        fixture.countOf("server/discover") - discoversBefore,
+        1,
+        "both callers must share ONE rebuild; a second closes the client the first just built"
+      );
+    });
   } finally {
     await fixture.close();
   }

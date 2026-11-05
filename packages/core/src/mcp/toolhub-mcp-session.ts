@@ -15,6 +15,8 @@
  * (reset → re-initialize → retry-once) lives in the client classes.
  */
 
+import { SdkErrorCode } from "@modelcontextprotocol/client";
+
 /**
  * HTTP-level error from a remote MCP server (transport/status layer), carrying
  * the status + body so session-expiry can be told apart from any other failure
@@ -62,6 +64,19 @@ export function isSessionExpiryHttpStatus(status: number, body: string): boolean
   return false;
 }
 
+/**
+ * True for the SDK's own "the transport is gone" error.
+ *
+ * ⚠️ Read the code rather than `instanceof SdkError`: the SDK ships dual
+ * CJS/ESM builds and this package compiles as CJS, so a second instance of the
+ * class (same runtime value in practice, different nominal type) can defeat the
+ * check — the same dual-declaration trap `toolhub-tasks.ts` documents. `code` is
+ * the stable string the SDK puts on every `SdkError`, whichever build raised it.
+ */
+function isConnectionClosedError(error: unknown): boolean {
+  return (error as { code?: unknown } | null | undefined)?.code === SdkErrorCode.ConnectionClosed;
+}
+
 /** True when an error means the remote MCP session/stream is gone. */
 export function isSessionLossError(error: unknown): boolean {
   if (error instanceof McpServerHttpError) {
@@ -70,7 +85,15 @@ export function isSessionLossError(error: unknown): boolean {
   if (error instanceof McpSseStreamClosedError) {
     return true;
   }
-  return false;
+  // ⚠️ `Client.close()` settles EVERY in-flight response handler with
+  // `SdkError(ConnectionClosed)`, and that error carries no HTTP status, so
+  // `toTypedTransportError` passes it through untouched. Without this branch a
+  // concurrent call killed by a discarded client — the task-runtime recovery
+  // closes one before rebuilding (issue #33) — hard-failed instead of being
+  // replayed. It is the moral equivalent of `McpSseStreamClosedError`: the
+  // connection no longer exists, so rebuilding it and replaying once is the only
+  // recovery there is.
+  return isConnectionClosedError(error);
 }
 
 /**
