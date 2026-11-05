@@ -70,8 +70,16 @@ async function startFixture({
   taskStatus = "completed",
   ttlMs = 600_000,
   /** Deliberately non-conforming: task a client even though we never advertised. */
-  forceTask = false
+  forceTask = false,
+  /**
+   * Optional `{ advertiseTasks }` read at REQUEST time, so a test can make the
+   * server begin advertising on a connection that is already open (issue #31).
+   * Omit it and the captured `advertiseTasks` above is used, which is what every
+   * other test does.
+   */
+  live = null
 } = {}) {
+  const advertises = () => (live ? live.advertiseTasks : advertiseTasks);
   const requests = [];
   const violations = [];
   let legacy = false;
@@ -138,7 +146,7 @@ async function startFixture({
           reply({
             resultType: "complete",
             supportedVersions: [PROTOCOL],
-            capabilities: { tools: {}, ...(advertiseTasks ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) }
+            capabilities: { tools: {}, ...(advertises() ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) }
           });
           return;
         case "initialize":
@@ -146,7 +154,7 @@ async function startFixture({
           // InitializeResult — the SDK's wire schema rejects the result without it.
           reply({
             protocolVersion: "2024-11-05",
-            capabilities: { tools: {}, ...(advertiseTasks ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) },
+            capabilities: { tools: {}, ...(advertises() ? { extensions: { [TASKS_EXTENSION_ID]: {} } } : {}) },
             serverInfo: { name: "fixture", version: "1.0.0" }
           });
           return;
@@ -159,7 +167,7 @@ async function startFixture({
         case "tools/call":
           // A conforming server only returns a task when it advertised the
           // extension AND the client declared it (SEP-2663, server step 2).
-          if (toolBehaviour === "task" && declared && (advertiseTasks || forceTask)) {
+          if (toolBehaviour === "task" && declared && (advertises() || forceTask)) {
             reply({
               resultType: "task",
               taskId: TASK_ID,
@@ -458,6 +466,33 @@ test("a task that never settles is abandoned at its TTL and cancelled remotely",
     );
     assert.ok(fixture.countOf("tasks/get") >= 1, "it must have polled before giving up");
     assert.equal(fixture.countOf("tasks/cancel"), 1, "giving up must cancel the task, not orphan it");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a server that begins advertising is re-probed on the same connection (issue #31)", async () => {
+  // The measured field case: a client connects while the backend does not
+  // advertise, caches that answer, and the backend then starts offering tasks.
+  // Before the fix the negative answer was permanent for the life of that
+  // connection — four toolhubs were in exactly this state on 2026-11-05 while
+  // the remote created and completed tasks they then could not read.
+  const live = { advertiseTasks: false };
+  const fixture = await startFixture({ advertiseTasks: false, toolBehaviour: "task", live });
+  try {
+    const texts = [];
+    await withAdapter(makeServerConfig({ url: fixture.url }), async (adapter) => {
+      texts.push((await adapter.callTool(TOOL_NAME, { input: "q" })).content[0].text);
+      assert.equal(fixture.countOf("tasks/get"), 0, "nothing may be polled while the server does not advertise");
+      live.advertiseTasks = true;
+      texts.push((await adapter.callTool(TOOL_NAME, { input: "q" })).content[0].text);
+    });
+    assert.equal(texts[0], "PLAIN ANSWER", "the first call must take the plain path");
+    assert.ok(
+      fixture.countOf("tasks/get") > 0,
+      "after the server began advertising, the SAME connection must attach and poll; " +
+        `observed tasks/get=${fixture.countOf("tasks/get")} texts=${JSON.stringify(texts)}`
+    );
   } finally {
     await fixture.close();
   }
